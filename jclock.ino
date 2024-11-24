@@ -46,6 +46,7 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 /* Don't hardwire the IP address or we won't get the benefits of the pool.
  *  Lookup the IP address for the host name instead */
 //IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server
+IPAddress localIP;
 IPAddress timeServerIP; // time.nist.gov NTP server address
 const char* ntpServerName = "time.nist.gov";
 
@@ -82,9 +83,9 @@ void setup()
 }
 
 bool wifiConnected = false;
-bool getNTPserver;
-bool requestTime;
-bool parseTime;
+bool getNTPserver = false;
+bool requestTime = false;
+bool parseTime = false;
 
 void loop()
 {
@@ -95,10 +96,11 @@ void loop()
       getNTPserver = true;
     
       Serial.println("WiFi connected");
-      Serial.println("IP address: ");
-      Serial.println(WiFi.localIP());
-
-      Serial.println("Starting UDP");
+      
+      localIP = WiFi.localIP();
+      Serial.printf("IP address: %s\n", localIP.toString().c_str());
+    
+      Serial.printf("Starting UDP on port %d\n", localPort);
       udp.begin(localPort);
     }
   }
@@ -126,7 +128,9 @@ void loop()
         parseTime = false;
         lastNtpRequestTime = millis();
         Serial.printf("packet received, length=%d\n", len);
-        parseNTPpacket(len);
+        // We've received a packet, read the data from it
+        udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
+        parseNTPpacket();
       }
     }
 
@@ -164,7 +168,8 @@ void loop()
 unsigned long sendNTPpacket(IPAddress& address)
 {
   // set all bytes in the buffer to 0
-  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  memset(packetBuffer, 0, sizeof(packetBuffer));
+
   // Initialize values needed to form NTP request
   // (see URL above for details on the packets)
   packetBuffer[0] = 0b11100011;   // LI, Version, Mode
@@ -180,15 +185,12 @@ unsigned long sendNTPpacket(IPAddress& address)
   // all NTP fields have been given values, now
   // you can send a packet requesting a timestamp:
   udp.beginPacket(address, 123); //NTP requests are to port 123
-  udp.write(packetBuffer, NTP_PACKET_SIZE);
+  udp.write(packetBuffer, sizeof(packetBuffer));
   udp.endPacket();
 }
 
-void parseNTPpacket(int len)
+void parseNTPpacket()
 {
-  // We've received a packet, read the data from it
-  udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
-
   //the timestamp starts at byte 40 of the received packet and is four bytes,
   // or two words, long. First, esxtract the two words:
 
@@ -217,7 +219,7 @@ void parseNTPpacket(int len)
   int minuteNow = minute(localTime);
   int secondNow = second(localTime);
 
-  char timeBuf[20]; // hh:mm:ss
+  char timeBuf[9]; // hh:mm:ss
   sprintf(&timeBuf[0], "%02d", hourNow); // print the hour (86400 equals secs per day)
   timeBuf[2] = ':';
   sprintf(&timeBuf[3], "%02d", minuteNow); // print the minute (3600 equals secs per minute)
