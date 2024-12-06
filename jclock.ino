@@ -69,9 +69,6 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 #define SDA_PIN 20
 #define SCL_PIN 21
 
-#define RXD1 18
-#define TXD1 17
-
 /* Don't hardwire the IP address or we won't get the benefits of the pool.
  *  Lookup the IP address for the host name instead */
 //IPAddress timeServer(129, 6, 15, 28); // time.nist.gov NTP server
