@@ -29,6 +29,8 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "wifi_credentials.h"
 #include "dfplayer.h"
 
+#include <DFPlayerMini_Fast.h>
+
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -36,10 +38,28 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 #include <Timezone.h>
 
-// US Eastern Time Zone (New York, Detroit)
+// US Eastern Time Zone
 TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
-TimeChangeRule usEST = {"EST", First, Sun, Nov, 2, -300};     // Standard time = UTC - 5 hours
+TimeChangeRule usEST = {"EST", First,  Sun, Nov, 2, -300};    // Standard time = UTC - 5 hours
 Timezone usEastern(usEDT, usEST);
+
+// US Central Time Zone
+TimeChangeRule usCDT = {"CDT", Second, Sun, Mar, 2, -300};    // Daylight time = UTC - 5 hours
+TimeChangeRule usCST = {"CST", First,  Sun, Nov, 2, -360};    // Standard time = UTC - 6 hours
+Timezone usCentral(usCDT, usCST);
+
+// US Mountain Time Zone
+TimeChangeRule usMDT = {"MDT", Second, Sun, Mar, 2, -360};    // Daylight time = UTC - 6 hours
+TimeChangeRule usMST = {"MST", First,  Sun, Nov, 2, -420};    // Standard time = UTC - 7 hours
+Timezone usMountain(usMDT, usMST);
+
+// US Pacific Time Zone
+TimeChangeRule usPDT = {"PDT", Second, Sun, Mar, 2, -420};    // Daylight time = UTC - 7 hours
+TimeChangeRule usPST = {"PST", First,  Sun, Nov, 2, -480};    // Standard time = UTC - 8 hours
+Timezone usPacific(usPDT, usPST);
+
+// change this to match your current timezone
+Timezone *myTimezone = &usEastern;
 
 RTClib rtcLib;
 DS3231 rtc;
@@ -48,6 +68,9 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 
 #define SDA_PIN 20
 #define SCL_PIN 21
+
+#define RXD1 18
+#define TXD1 17
 
 /* Don't hardwire the IP address or we won't get the benefits of the pool.
  *  Lookup the IP address for the host name instead */
@@ -122,6 +145,8 @@ class MyColorCallbackHandler : public BLECharacteristicCallbacks {
     Serial.println();
   }
 };
+
+DFPlayerMini_Fast myMP3;
 
 void setup()
 {
@@ -314,7 +339,7 @@ void parseNTPpacket()
   // print Unix time:
   Serial.println(epoch);
 
-  time_t localTime = usEastern.toLocal((time_t)utcTime);
+  time_t localTime = myTimezone->toLocal((time_t)utcTime);
 
   rtc.setEpoch(localTime, true);
 

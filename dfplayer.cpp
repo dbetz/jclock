@@ -8,7 +8,8 @@
 #define Version_Byte 0xFF
 #define Command_Length 0x06
 #define End_Byte 0xEF
-#define Acknowledge 0x01 //Returns info with command 0x41 [0x01: info, 0x00: no info]
+#define NoAcknowledge 0x00 // do not need to return the response
+#define Acknowledge 0x01 // need answering
 
 #define NextTrack 0x01
 #define PrevTrack 0x02
@@ -17,8 +18,10 @@
 #define DecreaseVolume 0x05
 #define SpecifyVolume 0x06
 #define SpecifySource 0x09
+#define SpecifyFolder 0x0f
 #define RepeatPlay 0x11
 #define SendInitializationParameters 0x3f
+#define QueryTotalNumberOfCardFiles 0x47
 
 #define SourceU 0
 #define SourceTF 1
@@ -31,13 +34,15 @@ static void execute_CMD(byte CMD, byte Par1, byte Par2);
 void mp3_initialize()
 {
   Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
+  Serial.println("Initializing");
+  execute_CMD(SendInitializationParameters, 0, 2);
+  delay(3000);
+  execute_CMD(QueryTotalNumberOfCardFiles, 0, 0);
+  delay(1000);
 }
 
 void mp3_playFirst()
 {
-  Serial.println("Initializing");
-  execute_CMD(SendInitializationParameters, 0, 2);
-  delay(5000);
   mp3_setVolume(20);
   delay(500);
   Serial.println("Playing first track");
@@ -64,7 +69,7 @@ static void execute_CMD(byte CMD, byte Par1, byte Par2)
     Version_Byte, 
     Command_Length, 
     CMD, 
-    Acknowledge,
+    NoAcknowledge,
     Par1, 
     Par2, 
     highByte(checksum), 
