@@ -26,9 +26,15 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include <WiFi.h>
 #include <WiFiClient.h>
 
-#include <Timezone.h>
-
 #include "wifi_credentials.h"
+#include "dfplayer.h"
+
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+#include <Timezone.h>
 
 // US Eastern Time Zone (New York, Detroit)
 TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
@@ -65,11 +71,65 @@ unsigned long lastNtpRequestTime;
 
 Adafruit_7segment display = Adafruit_7segment();
 
+//BLE server name
+#define bleServerName "JClock"
+
+// See the following for generating UUIDs:
+// https://www.uuidgenerator.net/
+
+#define TAG_SERVICE_UUID "9517ee93-7909-49e9-aa40-1bd9b825e0d3"
+#define TAG_IMAGE_CHARACTERISTIC_UUID "00767412-ac3b-4e86-8941-1fb7f70c87f1"
+#define TAG_COLOR_CHARACTERISTIC_UUID "d0dca24b-399b-4b07-baa3-0db90835d742"
+
+bool bleConnected = false;
+BLECharacteristic *pImageCharacteristic;
+BLECharacteristic *pColorCharacteristic;
+
+//Setup callbacks onConnect and onDisconnect
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) {
+    Serial.println("Connected");
+    bleConnected = true;
+  };
+  void onDisconnect(BLEServer* pServer) {
+    Serial.println("Disconnected");
+    bleConnected = false;
+  }
+};
+
+class MyImageCallbackHandler : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    uint8_t *data = pCharacteristic->getData();
+    size_t length = pCharacteristic->getLength();
+
+    Serial.printf("Image:");
+    for (size_t i = 0; i < length; ++i) {
+      Serial.printf(" %02x", data[i]);
+    }
+    Serial.println();
+  }
+};
+
+class MyColorCallbackHandler : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    uint8_t *data = pCharacteristic->getData();
+    size_t length = pCharacteristic->getLength();
+
+    Serial.printf("Color:");
+    for (size_t i = 0; i < length; ++i) {
+      Serial.printf(" %02x", data[i]);
+    }
+    Serial.println();
+  }
+};
+
 void setup()
 {
   Serial.begin(115200);
   delay(500);
-  
+                
+  mp3_initialize();
+
   Serial.printf("jclock\n");
 
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -80,6 +140,47 @@ void setup()
   Serial.print("Connecting to ");
   Serial.println(ssid);
   WiFi.begin(ssid, pass);
+  
+  // Create the BLE Device
+  BLEDevice::init(bleServerName);
+
+  // Create the BLE Server
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create the BLE Service
+  BLEService *bmeService = pServer->createService(TAG_SERVICE_UUID);
+
+  pImageCharacteristic = bmeService->createCharacteristic(TAG_IMAGE_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pImageCharacteristic->setCallbacks(new MyImageCallbackHandler);
+
+  pColorCharacteristic = bmeService->createCharacteristic(TAG_COLOR_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pColorCharacteristic->setCallbacks(new MyColorCallbackHandler);
+
+/*
+  // Create BLE Characteristics and Create a BLE Descriptor
+
+  // Temperature
+  bmeService->addCharacteristic(&bmeTemperatureCelsiusCharacteristics);
+  bmeTemperatureCelsiusDescriptor.setValue("BME temperature Celsius");
+  bmeTemperatureCelsiusCharacteristics.addDescriptor(&bmeTemperatureCelsiusDescriptor);
+
+  // Humidity
+  bmeService->addCharacteristic(&bmeHumidityCharacteristics);
+  bmeHumidityDescriptor.setValue("BME humidity");
+  bmeHumidityCharacteristics.addDescriptor(new BLE2902());
+*/
+
+  // Start the service
+  bmeService->start();
+
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(TAG_SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Waiting a client connection to notify...");
+
+  mp3_playFirst();
 }
 
 bool wifiConnected = false;
@@ -162,6 +263,8 @@ void loop()
   display.writeDigitNum(3, minuteNow / 10);
   display.writeDigitNum(4, minuteNow % 10, isPM);
   display.writeDisplay();
+
+  mp3_idle();
 }
 
 // send an NTP request to the time server at the given address
