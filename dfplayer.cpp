@@ -31,25 +31,45 @@
 
 static void execute_CMD(byte CMD, byte Par1, byte Par2);
 
+#define MY_CODE
+
+#ifndef MY_CODE
+#include <DFPlayerMini_Fast.h>
+DFPlayerMini_Fast myMP3;
+#endif
+
 void mp3_initialize()
 {
   Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
+#ifdef MY_CODE
+  delay(10000);
   Serial.println("Initializing");
   execute_CMD(SendInitializationParameters, 0, 2);
   delay(3000);
-  execute_CMD(QueryTotalNumberOfCardFiles, 0, 0);
-  delay(1000);
+#else
+  myMP3.begin(Serial1, true);
+#endif
 }
 
 void mp3_playFirst()
 {
-  mp3_setVolume(20);
+#ifdef MY_CODE
+  mp3_setVolume(30);
   delay(500);
   Serial.println("Playing first track");
   execute_CMD(SpecifySource, 0, SourceTF);
   delay(500);
   execute_CMD(RepeatPlay, 0, 1); 
   delay(500);
+#else
+  delay(1000);
+  
+  Serial.println("Setting volume to max");
+  myMP3.volume(30);
+  
+  Serial.println("Looping track 1");
+  myMP3.loop(1);
+#endif
 }
 
 void mp3_setVolume(int volume)
@@ -61,7 +81,8 @@ void mp3_setVolume(int volume)
 static void execute_CMD(byte CMD, byte Par1, byte Par2)
 {
   // Calculate the checksum (2 bytes)
-  word checksum = -(Version_Byte + Command_Length + CMD + Acknowledge + Par1 + Par2);
+  //word checksum = -(Version_Byte + Command_Length + CMD + Acknowledge + Par1 + Par2);
+  word checksum = 0xFFFF - (Version_Byte + Command_Length + CMD + NoAcknowledge + Par1 + Par2) + 1;
 
   // Build the command line
   byte Command_line[10] = {
@@ -84,9 +105,13 @@ static void execute_CMD(byte CMD, byte Par1, byte Par2)
 void mp3_idle()
 {
   int available = Serial1.available();
-  while (available > 0) {
-    int byte = Serial1.read();
-    Serial.printf("MP3: %02x\n", byte);
-    --available;
+  if (available > 0) {
+    Serial.print("MP3:");
+    while (available > 0) {
+      int byte = Serial1.read();
+      Serial.printf(" %02x", byte);
+      --available;
+    }
+    Serial.println();
   }
 }

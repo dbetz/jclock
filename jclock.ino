@@ -29,8 +29,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "wifi_credentials.h"
 #include "dfplayer.h"
 
-#include <DFPlayerMini_Fast.h>
-
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -84,8 +82,8 @@ byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packe
 WiFiUDP udp;
 
 // query the NTP server every 10 minutes
-//#define NTP_INTERVAL  (10 * 60 * 1000)
-#define NTP_INTERVAL  (10 * 1000)
+#define NTP_INTERVAL  (10 * 60 * 1000)
+//#define NTP_INTERVAL  (10 * 1000)
 
 unsigned long lastNtpRequestTime;
 
@@ -142,8 +140,6 @@ class MyColorCallbackHandler : public BLECharacteristicCallbacks {
     Serial.println();
   }
 };
-
-DFPlayerMini_Fast myMP3;
 
 void setup()
 {
