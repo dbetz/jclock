@@ -31,7 +31,7 @@
 
 static void execute_CMD(byte CMD, byte Par1, byte Par2);
 
-#define MY_CODE
+//#define MY_CODE
 
 #ifndef MY_CODE
 #include <DFPlayerMini_Fast.h>
@@ -65,7 +65,7 @@ void mp3_playFirst()
   delay(1000);
   
   Serial.println("Setting volume to max");
-  myMP3.volume(30);
+  myMP3.volume(10);
   
   Serial.println("Looping track 1");
   myMP3.loop(1);

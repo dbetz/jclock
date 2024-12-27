@@ -21,7 +21,13 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include <TimeLib.h>
 #include <Adafruit_GFX.h>
 #include "Adafruit_LEDBackpack.h"
+#include "Adafruit_seesaw.h"
+#include <seesaw_neopixel.h>
+#include <debounce.h>
 #include <DS3231.h>
+#include "Audio.h"
+#include "SD.h"
+#include "FS.h"
 
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -36,6 +42,17 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 #include <Timezone.h>
 
+// microSD Card Reader connections
+#define SD_CS          5
+#define SPI_MOSI      35 
+#define SPI_MISO      37
+#define SPI_SCK       36
+ 
+// I2S Connections
+#define I2S_DOUT      12
+#define I2S_BCLK      11
+#define I2S_LRC       13
+ 
 // US Eastern Time Zone
 TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
 TimeChangeRule usEST = {"EST", First,  Sun, Nov, 2, -300};    // Standard time = UTC - 5 hours
@@ -62,10 +79,61 @@ Timezone *myTimezone = &usEastern;
 RTClib rtcLib;
 DS3231 rtc;
 
+// Create Audio object
+Audio audio;
+ 
+#define SS_SWITCH        24
+#define SS_NEOPIX        6
+
+Adafruit_seesaw ss;
+seesaw_NeoPixel sspixel = seesaw_NeoPixel(1, SS_NEOPIX, NEO_GRB + NEO_KHZ800);
+
+enum class EncoderState {
+  TIME,
+  ADJUSTING,
+  COUNTING
+};
+
+EncoderState encoderState = EncoderState::TIME;
+int32_t encoderCount = 0;
+bool encoderButtonState = false;
+
+unsigned long timeRemaining;
+unsigned long secondStartTime;
+
 unsigned int localPort = 2390;      // local port to listen for UDP packets
 
-#define SDA_PIN 20
-#define SCL_PIN 21
+#define SDA_PIN 3
+#define SCL_PIN 4
+
+#define I2C_ENCODER 0x36
+#define I2C_RTC     0x68
+#define I2C_DISPLAY 0x70
+
+static void buttonHandler(uint8_t btnId, uint8_t btnState) 
+{
+  if (btnState == BTN_PRESSED) {
+    Serial.println("Pushed button");
+    switch (encoderState) {
+    case EncoderState::ADJUSTING:
+      encoderState = EncoderState::COUNTING;
+      secondStartTime = millis();
+      timeRemaining = encoderCount * 60000; // in milliseconds
+      break;
+    case EncoderState::COUNTING:
+      encoderState = EncoderState::TIME;
+      encoderCount = 0;
+      ss.setEncoderPosition(encoderCount);
+      break;
+    }
+  } 
+  else {
+    // btnState == BTN_OPEN.
+    Serial.println("Released button");
+  }
+}
+
+Button myButton(0, buttonHandler);
 
 /* Don't hardwire the IP address or we won't get the benefits of the pool.
  *  Lookup the IP address for the host name instead */
@@ -76,7 +144,7 @@ const char* ntpServerName = "time.nist.gov";
 
 const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
 
-byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
+uint8_t packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
 
 // A UDP instance to let us send and receive packets over UDP
 WiFiUDP udp;
@@ -86,6 +154,8 @@ WiFiUDP udp;
 //#define NTP_INTERVAL  (10 * 1000)
 
 unsigned long lastNtpRequestTime;
+
+bool showPM = false;
 
 Adafruit_7segment display = Adafruit_7segment();
 
@@ -150,9 +220,50 @@ void setup()
 
   Serial.printf("jclock\n");
 
+  // Start microSD Card
+  if (!SD.begin(SD_CS)) {
+    Serial.println("Error accessing microSD card!");
+    while(true); 
+  }
+  
+  // Setup I2S 
+  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+  
+  // Set Volume
+  audio.setVolume(10);
+  
   Wire.begin(SDA_PIN, SCL_PIN);
 
-  display.begin(0x70);
+  display.begin(I2C_DISPLAY);
+
+  if (! ss.begin(I2C_ENCODER) || ! sspixel.begin(I2C_ENCODER)) {
+    Serial.println("Couldn't find seesaw on default address");
+    while(1) delay(10);
+  }
+  Serial.println("seesaw started");
+
+  uint32_t version = ((ss.getVersion() >> 16) & 0xFFFF);
+  if (version  != 4991){
+    Serial.print("Wrong firmware loaded? ");
+    Serial.println(version);
+    while(1) delay(10);
+  }
+  Serial.println("Found Product 4991");
+
+  // set not so bright!
+  sspixel.setBrightness(20);
+  sspixel.show();
+  
+  // use a pin for the built in encoder switch
+  ss.pinMode(SS_SWITCH, INPUT_PULLUP);
+
+  // set starting position
+  ss.setEncoderPosition(encoderCount);
+
+  Serial.println("Turning on interrupts");
+  delay(10);
+  ss.setGPIOInterrupts((uint32_t)1 << SS_SWITCH, 1);
+  ss.enableEncoderInterrupt();
 
   // We start by connecting to a WiFi network
   Serial.print("Connecting to ");
@@ -198,7 +309,7 @@ void setup()
   pServer->getAdvertising()->start();
   Serial.println("Waiting a client connection to notify...");
 
-  mp3_playFirst();
+  //mp3_playFirst();
 }
 
 bool wifiConnected = false;
@@ -208,6 +319,9 @@ bool parseTime = false;
 
 void loop()
 {
+  audio.loop();    
+  //mp3_idle();
+
   // check to see if wifi is connected
   if (!wifiConnected) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -261,11 +375,49 @@ void loop()
     }
   }
 
+  switch (encoderState) {
+    case EncoderState::TIME:
+      DisplayTime();
+      break;
+    case EncoderState::ADJUSTING:
+      DisplayCounter();
+      break;
+    case EncoderState::COUNTING:
+      DisplayTimeRemaining();
+      if (timeRemaining <= 0) {
+        audio.connecttoFS(SD,"/0001.mp3");
+        encoderState = EncoderState::TIME;
+      }
+      break;
+    default:
+      encoderState = EncoderState::TIME;
+      break;
+  }
+
+  myButton.update(!ss.digitalRead(SS_SWITCH));
+
+  if (encoderState == EncoderState::COUNTING) {
+    unsigned long currentTime = millis();
+    if ((currentTime - secondStartTime) >= 1000) {
+      secondStartTime += 1000;
+      timeRemaining -= 1000;
+    }
+  }
+
+  int32_t newCount = ss.getEncoderPosition();
+  if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
+    encoderCount = newCount;
+    encoderState = EncoderState::ADJUSTING;
+  }
+}
+
+void DisplayTime()
+{
   DateTime now = rtcLib.now();
   uint8_t hourNow = now.hour();
   uint8_t minuteNow = now.minute();
   uint8_t secondNow = now.second();
-  bool isPM = (hourNow >= 12);
+  bool isPM = showPM && (hourNow >= 12);
 
   // convert 24 hour time to 12 hour AM/PM time
   if (hourNow == 0) {
@@ -275,14 +427,71 @@ void loop()
     hourNow -= 12;
   }
 
-  display.writeDigitNum(0, hourNow / 10);
+  if (hourNow < 10) {
+    display.writeDigitAscii(0, ' ');
+  }
+  else {
+    display.writeDigitNum(0, hourNow / 10);
+  }
   display.writeDigitNum(1, hourNow % 10);
   display.drawColon((secondNow % 2) == 0);
   display.writeDigitNum(3, minuteNow / 10);
   display.writeDigitNum(4, minuteNow % 10, isPM);
   display.writeDisplay();
+}
 
-  mp3_idle();
+void DisplayCounter()
+{
+  if (encoderCount < 1000) {
+    display.writeDigitAscii(0, ' ');
+  }
+  else {
+    display.writeDigitNum(0,  (encoderCount / 1000) % 10);
+  }
+  if (encoderCount < 100) {
+    display.writeDigitAscii(1, ' ');
+  }
+  else {
+    display.writeDigitNum(1, (encoderCount / 100) % 10);
+  }
+  display.drawColon(false);
+  if (encoderCount < 10) {
+    display.writeDigitAscii(3, ' ');
+  }
+  else {
+    display.writeDigitNum(3, (encoderCount / 10) % 10);
+  }
+  display.writeDigitNum(4,  encoderCount % 10);
+  display.writeDisplay();
+}
+
+void DisplayTimeRemaining()
+{
+  int seconds = timeRemaining / 1000;
+  int minutes = seconds / 60;
+  seconds %= 60;
+  if (minutes < 10) {
+    display.writeDigitAscii(0, ' ');
+  }
+  else {
+    display.writeDigitNum(0,  (minutes / 10) % 10);
+  }
+  if (minutes == 0) {
+    display.writeDigitAscii(1, ' ');
+    display.drawColon(false);
+  }
+  else {
+    display.writeDigitNum(1, minutes % 10);
+    display.drawColon(true);
+  }
+  if (minutes == 0 && seconds < 10) {
+    display.writeDigitAscii(3, ' ');
+  }
+  else {
+    display.writeDigitNum(3,  (seconds / 10) % 10);
+  }
+  display.writeDigitNum(4,  seconds % 10);
+  display.writeDisplay();
 }
 
 // send an NTP request to the time server at the given address
@@ -351,3 +560,18 @@ void parseNTPpacket()
   Serial.print("The time is ");
   Serial.println(timeBuf);
 }
+
+uint32_t Wheel(uint8_t WheelPos) 
+{
+  WheelPos = 255 - WheelPos;
+  if (WheelPos < 85) {
+    return sspixel.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  }
+  if (WheelPos < 170) {
+    WheelPos -= 85;
+    return sspixel.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+  WheelPos -= 170;
+  return sspixel.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+}
+
