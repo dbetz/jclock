@@ -95,8 +95,9 @@ enum class EncoderState {
 };
 
 EncoderState encoderState = EncoderState::TIME;
-int32_t encoderCount = 0;
+int32_t encoderCount;
 bool encoderButtonState = false;
+unsigned long encoderLastMoved;
 
 unsigned long timeRemaining;
 unsigned long secondStartTime;
@@ -236,7 +237,7 @@ void setup()
 
   display.begin(I2C_DISPLAY);
 
-  if (! ss.begin(I2C_ENCODER) || ! sspixel.begin(I2C_ENCODER)) {
+  if (!ss.begin(I2C_ENCODER) || !sspixel.begin(I2C_ENCODER)) {
     Serial.println("Couldn't find seesaw on default address");
     while(1) delay(10);
   }
@@ -258,7 +259,10 @@ void setup()
   ss.pinMode(SS_SWITCH, INPUT_PULLUP);
 
   // set starting position
-  ss.setEncoderPosition(encoderCount);
+  resetEncoder();
+
+  // go back to the clock display if the encoder hasn't been moved in 10 seconds
+  encoderLastMoved = millis() - 10000;
 
   Serial.println("Turning on interrupts");
   delay(10);
@@ -319,6 +323,8 @@ bool parseTime = false;
 
 void loop()
 {
+  unsigned long currentTime = millis();
+
   audio.loop();    
   //mp3_idle();
 
@@ -359,7 +365,7 @@ void loop()
       int len = udp.parsePacket();
       if (len != 0) {
         parseTime = false;
-        lastNtpRequestTime = millis();
+        lastNtpRequestTime = currentTime;
         Serial.printf("packet received, length=%d\n", len);
         // We've received a packet, read the data from it
         udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
@@ -368,7 +374,7 @@ void loop()
     }
 
     else {
-      if (millis() - lastNtpRequestTime >= NTP_INTERVAL) {
+      if (currentTime - lastNtpRequestTime >= NTP_INTERVAL) {
         Serial.println("Sending a new NTP request");
         getNTPserver = true;
       }
@@ -377,21 +383,29 @@ void loop()
 
   switch (encoderState) {
     case EncoderState::TIME:
-      DisplayTime();
+      displayTime();
       break;
     case EncoderState::ADJUSTING:
-      DisplayCounter();
+      displayCounter();
       break;
     case EncoderState::COUNTING:
-      DisplayTimeRemaining();
+      displayTimeRemaining();
       if (timeRemaining <= 0) {
         audio.connecttoFS(SD,"/0001.mp3");
         encoderState = EncoderState::TIME;
+        resetEncoder();
       }
       break;
     default:
       encoderState = EncoderState::TIME;
+      resetEncoder();
       break;
+  }
+
+  // go back to displaying the time if the encoder hasn't been turned in 10 seconds
+  if (encoderState == EncoderState::ADJUSTING && (currentTime - encoderLastMoved) >= 10000) {
+    encoderState = EncoderState::TIME;
+    resetEncoder();
   }
 
   myButton.update(!ss.digitalRead(SS_SWITCH));
@@ -408,10 +422,17 @@ void loop()
   if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
     encoderCount = newCount;
     encoderState = EncoderState::ADJUSTING;
+    encoderLastMoved = currentTime;
   }
 }
 
-void DisplayTime()
+void resetEncoder()
+{
+  encoderCount = 0;
+  ss.setEncoderPosition(encoderCount);
+}
+
+void displayTime()
 {
   DateTime now = rtcLib.now();
   uint8_t hourNow = now.hour();
@@ -440,7 +461,7 @@ void DisplayTime()
   display.writeDisplay();
 }
 
-void DisplayCounter()
+void displayCounter()
 {
   if (encoderCount < 1000) {
     display.writeDigitAscii(0, ' ');
@@ -465,7 +486,7 @@ void DisplayCounter()
   display.writeDisplay();
 }
 
-void DisplayTimeRemaining()
+void displayTimeRemaining()
 {
   int seconds = timeRemaining / 1000;
   int minutes = seconds / 60;
