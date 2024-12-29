@@ -23,17 +23,21 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "Adafruit_LEDBackpack.h"
 #include "Adafruit_seesaw.h"
 #include <seesaw_neopixel.h>
+#include "Adafruit_MAX1704X.h"
 #include <debounce.h>
 #include <DS3231.h>
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
 
+#include <Preferences.h>
+#define RW_MODE false
+#define RO_MODE true
+
 #include <WiFi.h>
 #include <WiFiClient.h>
 
 #include "wifi_credentials.h"
-#include "dfplayer.h"
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -53,6 +57,8 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #define I2S_BCLK      11
 #define I2S_LRC       13
  
+Preferences prefs;
+
 // US Eastern Time Zone
 TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
 TimeChangeRule usEST = {"EST", First,  Sun, Nov, 2, -300};    // Standard time = UTC - 5 hours
@@ -79,6 +85,8 @@ Timezone *myTimezone = &usEastern;
 RTClib rtcLib;
 DS3231 rtc;
 
+Adafruit_MAX17048 maxlipo;
+
 // Create Audio object
 Audio audio;
  
@@ -96,8 +104,9 @@ enum class EncoderState {
 
 EncoderState encoderState = EncoderState::TIME;
 int32_t encoderCount;
-bool encoderButtonState = false;
 unsigned long encoderLastMoved;
+
+bool encoderButtonState = false;
 
 unsigned long timeRemaining;
 unsigned long secondStartTime;
@@ -107,7 +116,8 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 #define SDA_PIN 3
 #define SCL_PIN 4
 
-#define I2C_ENCODER 0x36
+#define I2C_POWER   0x36
+#define I2C_ENCODER 0x37
 #define I2C_RTC     0x68
 #define I2C_DISPLAY 0x70
 
@@ -171,6 +181,7 @@ Adafruit_7segment display = Adafruit_7segment();
 #define TAG_COLOR_CHARACTERISTIC_UUID "d0dca24b-399b-4b07-baa3-0db90835d742"
 
 bool bleConnected = false;
+BLEServer *pServer;
 BLECharacteristic *pImageCharacteristic;
 BLECharacteristic *pColorCharacteristic;
 
@@ -183,6 +194,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer* pServer) {
     Serial.println("Disconnected");
     bleConnected = false;
+    startAdvertising();
   }
 };
 
@@ -212,15 +224,39 @@ class MyColorCallbackHandler : public BLECharacteristicCallbacks {
   }
 };
 
+unsigned long batterySampleTime;
+
 void setup()
 {
   Serial.begin(115200);
-  delay(500);
+  delay(1000);
                 
-  mp3_initialize();
-
   Serial.printf("jclock\n");
 
+  if (maxlipo.begin()) {
+    Serial.print(F("Found MAX17048"));
+    Serial.print(F(" with Chip ID: 0x")); 
+    Serial.println(maxlipo.getChipID(), HEX);
+  }
+  else {
+    Serial.println("Can't find MAX17048");
+  }
+
+  prefs.begin("Settings", RW_MODE);
+
+  prefs.clear();
+
+  bool initialized = prefs.isKey("Initialized");
+  if (!initialized) {
+    Serial.println("Initializing settings");
+    prefs.putBool("Initialized", true);
+    prefs.putBool("ShowPM", false);
+  }
+
+  if (prefs.isKey("ShowPM")) {
+    showPM = prefs.getBool("ShowPM");
+  }
+  
   // Start microSD Card
   if (!SD.begin(SD_CS)) {
     Serial.println("Error accessing microSD card!");
@@ -278,7 +314,7 @@ void setup()
   BLEDevice::init(bleServerName);
 
   // Create the BLE Server
-  BLEServer *pServer = BLEDevice::createServer();
+  pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
   // Create the BLE Service
@@ -308,12 +344,9 @@ void setup()
   bmeService->start();
 
   // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(TAG_SERVICE_UUID);
-  pServer->getAdvertising()->start();
-  Serial.println("Waiting a client connection to notify...");
+  startAdvertising();
 
-  //mp3_playFirst();
+  batterySampleTime = millis();
 }
 
 bool wifiConnected = false;
@@ -326,7 +359,13 @@ void loop()
   unsigned long currentTime = millis();
 
   audio.loop();    
-  //mp3_idle();
+
+  if ((currentTime - batterySampleTime) >= 1000) {
+    batterySampleTime = currentTime;
+    Serial.print(F("Batt Voltage: ")); Serial.print(maxlipo.cellVoltage(), 3); Serial.println(" V");
+    Serial.print(F("Batt Percent: ")); Serial.print(maxlipo.cellPercent(), 1); Serial.println(" %");
+    Serial.println();
+  }
 
   // check to see if wifi is connected
   if (!wifiConnected) {
@@ -408,15 +447,14 @@ void loop()
     resetEncoder();
   }
 
-  myButton.update(!ss.digitalRead(SS_SWITCH));
-
   if (encoderState == EncoderState::COUNTING) {
-    unsigned long currentTime = millis();
     if ((currentTime - secondStartTime) >= 1000) {
       secondStartTime += 1000;
       timeRemaining -= 1000;
     }
   }
+
+  myButton.update(!ss.digitalRead(SS_SWITCH));
 
   int32_t newCount = ss.getEncoderPosition();
   if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
@@ -424,6 +462,14 @@ void loop()
     encoderState = EncoderState::ADJUSTING;
     encoderLastMoved = currentTime;
   }
+}
+
+void startAdvertising()
+{
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(TAG_SERVICE_UUID);
+  pServer->getAdvertising()->start();
+  Serial.println("Awaiting a client connection...");
 }
 
 void resetEncoder()
