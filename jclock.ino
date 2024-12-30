@@ -17,6 +17,8 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 */
 
+#include <stdarg.h>
+
 #include <Wire.h>
 #include <TimeLib.h>
 #include <Adafruit_GFX.h>
@@ -36,8 +38,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 #include <WiFi.h>
 #include <WiFiClient.h>
-
-#include "wifi_credentials.h"
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -59,6 +59,9 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
  
 Preferences prefs;
 
+String ssid;
+String pass;
+
 // US Eastern Time Zone
 TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
 TimeChangeRule usEST = {"EST", First,  Sun, Nov, 2, -300};    // Standard time = UTC - 5 hours
@@ -74,10 +77,43 @@ TimeChangeRule usMDT = {"MDT", Second, Sun, Mar, 2, -360};    // Daylight time =
 TimeChangeRule usMST = {"MST", First,  Sun, Nov, 2, -420};    // Standard time = UTC - 7 hours
 Timezone usMountain(usMDT, usMST);
 
+// Arizona is US Mountain Time Zone but does not use DST
+Timezone usAZ(usMST);
+
 // US Pacific Time Zone
 TimeChangeRule usPDT = {"PDT", Second, Sun, Mar, 2, -420};    // Daylight time = UTC - 7 hours
 TimeChangeRule usPST = {"PST", First,  Sun, Nov, 2, -480};    // Standard time = UTC - 8 hours
 Timezone usPacific(usPDT, usPST);
+
+// Finland Time Zone
+TimeChangeRule finlandDT = {"FDT", Last, Sun, Mar, 3, 180};   // Daylight time = UTC + 3 hours
+TimeChangeRule finlandST = {"FST", Last,  Sun, Oct, 4, 120};  // Standard time = UTC + 2 hours
+Timezone finland(finlandDT, finlandST);
+
+struct NamedTimezone {
+  const char *name;
+  Timezone *timezone;
+};
+
+NamedTimezone timezones[] = {
+  { "US-Eastern",   &usEastern  },
+  { "US-Central",   &usCentral  },
+  { "US-Mountain",  &usMountain },
+  { "US-Arizona",   &usAZ       },
+  { "US-Pacific",   &usPacific  },
+  { "Finland",      &finland    }
+};
+int timezoneCount = sizeof(timezones) / sizeof(timezones[0]);
+
+Timezone *findTimezone(const char *name)
+{
+  for (int i = 0; i < timezoneCount; ++i) {
+    if (strcmp(name, timezones[i].name) == 0) {
+      return timezones[i].timezone;
+    }
+  }
+  return NULL;
+}
 
 // change this to match your current timezone
 Timezone *myTimezone = &usEastern;
@@ -124,7 +160,7 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 static void buttonHandler(uint8_t btnId, uint8_t btnState) 
 {
   if (btnState == BTN_PRESSED) {
-    Serial.println("Pushed button");
+    log("Pushed button\n");
     switch (encoderState) {
     case EncoderState::ADJUSTING:
       encoderState = EncoderState::COUNTING;
@@ -140,7 +176,7 @@ static void buttonHandler(uint8_t btnId, uint8_t btnState)
   } 
   else {
     // btnState == BTN_OPEN.
-    Serial.println("Released button");
+    log("Released button\n");
   }
 }
 
@@ -188,11 +224,11 @@ BLECharacteristic *pColorCharacteristic;
 //Setup callbacks onConnect and onDisconnect
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
-    Serial.println("Connected");
+    log("Connected\n");
     bleConnected = true;
   };
   void onDisconnect(BLEServer* pServer) {
-    Serial.println("Disconnected");
+    log("Disconnected\n");
     bleConnected = false;
     startAdvertising();
   }
@@ -203,11 +239,11 @@ class MyImageCallbackHandler : public BLECharacteristicCallbacks {
     uint8_t *data = pCharacteristic->getData();
     size_t length = pCharacteristic->getLength();
 
-    Serial.printf("Image:");
+    log("Image:");
     for (size_t i = 0; i < length; ++i) {
-      Serial.printf(" %02x", data[i]);
+      log(" %02x", data[i]);
     }
-    Serial.println();
+    log("\n");
   }
 };
 
@@ -216,11 +252,11 @@ class MyColorCallbackHandler : public BLECharacteristicCallbacks {
     uint8_t *data = pCharacteristic->getData();
     size_t length = pCharacteristic->getLength();
 
-    Serial.printf("Color:");
+    log("Color:");
     for (size_t i = 0; i < length; ++i) {
-      Serial.printf(" %02x", data[i]);
+      log(" %02x", data[i]);
     }
-    Serial.println();
+    log("\n");
   }
 };
 
@@ -231,35 +267,40 @@ void setup()
   Serial.begin(115200);
   delay(1000);
                 
-  Serial.printf("jclock\n");
+  log("jclock\n");
 
   if (maxlipo.begin()) {
-    Serial.print(F("Found MAX17048"));
-    Serial.print(F(" with Chip ID: 0x")); 
-    Serial.println(maxlipo.getChipID(), HEX);
+    log("Found MAX17048 with Chip ID: 0x%02x\n", maxlipo.getChipID()); 
   }
   else {
-    Serial.println("Can't find MAX17048");
+    log("Can't find MAX17048\n");
   }
 
   prefs.begin("Settings", RW_MODE);
 
-  prefs.clear();
+  //prefs.clear();
 
-  bool initialized = prefs.isKey("Initialized");
-  if (!initialized) {
-    Serial.println("Initializing settings");
-    prefs.putBool("Initialized", true);
-    prefs.putBool("ShowPM", false);
+  ssid = prefs.getString("SSID", String("NONE"));
+  pass = prefs.getString("Password", String("NONE"));
+
+  String timezoneStr = prefs.getString("Timezone", String("US-Eastern"));
+  Timezone *timezone = findTimezone(timezoneStr.c_str());
+  if (timezone == NULL) {
+    log("No timezone '%s'\n", timezoneStr.c_str());
+  }
+  else {
+    log("Timzone is %s\n", timezoneStr.c_str());
+    myTimezone = timezone;
   }
 
-  if (prefs.isKey("ShowPM")) {
-    showPM = prefs.getBool("ShowPM");
-  }
+  String showPMstr = prefs.getString("ShowPM", String("false"));
+  showPM = strcmp(showPMstr.c_str(), "true") == 0;
+
+  prefs.end();
   
   // Start microSD Card
   if (!SD.begin(SD_CS)) {
-    Serial.println("Error accessing microSD card!");
+    log("Error accessing microSD card!\n");
     while(true); 
   }
   
@@ -274,18 +315,17 @@ void setup()
   display.begin(I2C_DISPLAY);
 
   if (!ss.begin(I2C_ENCODER) || !sspixel.begin(I2C_ENCODER)) {
-    Serial.println("Couldn't find seesaw on default address");
+    log("Couldn't find seesaw on default address\n");
     while(1) delay(10);
   }
-  Serial.println("seesaw started");
+  log("seesaw started\n");
 
   uint32_t version = ((ss.getVersion() >> 16) & 0xFFFF);
   if (version  != 4991){
-    Serial.print("Wrong firmware loaded? ");
-    Serial.println(version);
+    log("Wrong firmware loaded? %u\n", version);
     while(1) delay(10);
   }
-  Serial.println("Found Product 4991");
+  log("Found Product 4991\n");
 
   // set not so bright!
   sspixel.setBrightness(20);
@@ -300,15 +340,14 @@ void setup()
   // go back to the clock display if the encoder hasn't been moved in 10 seconds
   encoderLastMoved = millis() - 10000;
 
-  Serial.println("Turning on interrupts");
+  log("Turning on interrupts\n");
   delay(10);
   ss.setGPIOInterrupts((uint32_t)1 << SS_SWITCH, 1);
   ss.enableEncoderInterrupt();
 
   // We start by connecting to a WiFi network
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, pass);
+  log("Connecting to '%s'\n", ssid.c_str());
+  WiFi.begin(ssid.c_str(), pass.c_str());
   
   // Create the BLE Device
   BLEDevice::init(bleServerName);
@@ -362,9 +401,8 @@ void loop()
 
   if ((currentTime - batterySampleTime) >= 1000) {
     batterySampleTime = currentTime;
-    Serial.print(F("Batt Voltage: ")); Serial.print(maxlipo.cellVoltage(), 3); Serial.println(" V");
-    Serial.print(F("Batt Percent: ")); Serial.print(maxlipo.cellPercent(), 1); Serial.println(" %");
-    Serial.println();
+    log("Batt Voltage: %g V\n", maxlipo.cellVoltage());
+    log("Batt Percent: %g %%\n\n", maxlipo.cellPercent());
   }
 
   // check to see if wifi is connected
@@ -373,12 +411,12 @@ void loop()
       wifiConnected = true;
       getNTPserver = true;
     
-      Serial.println("WiFi connected");
+      log("WiFi connected\n");
       
       localIP = WiFi.localIP();
-      Serial.printf("IP address: %s\n", localIP.toString().c_str());
+      log("IP address: %s\n", localIP.toString().c_str());
     
-      Serial.printf("Starting UDP on port %d\n", localPort);
+      log("Starting UDP on port %d\n", localPort);
       udp.begin(localPort);
     }
   }
@@ -390,13 +428,13 @@ void loop()
       requestTime = true;
       //get a random server from the pool
       WiFi.hostByName(ntpServerName, timeServerIP);
-      Serial.printf("NTP server IP address: %s\n", timeServerIP.toString().c_str());
+      log("NTP server IP address: %s\n", timeServerIP.toString().c_str());
     }
 
     else if (requestTime) {
       requestTime = false;
       parseTime = true;
-      Serial.println("sending NTP packet...");
+      log("sending NTP packet...\n");
       sendNTPpacket(timeServerIP); // send an NTP packet to a time server
     }
     
@@ -405,7 +443,7 @@ void loop()
       if (len != 0) {
         parseTime = false;
         lastNtpRequestTime = currentTime;
-        Serial.printf("packet received, length=%d\n", len);
+        log("packet received, length=%d\n", len);
         // We've received a packet, read the data from it
         udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
         parseNTPpacket();
@@ -414,7 +452,7 @@ void loop()
 
     else {
       if (currentTime - lastNtpRequestTime >= NTP_INTERVAL) {
-        Serial.println("Sending a new NTP request");
+        log("Sending a new NTP request\n");
         getNTPserver = true;
       }
     }
@@ -462,6 +500,8 @@ void loop()
     encoderState = EncoderState::ADJUSTING;
     encoderLastMoved = currentTime;
   }
+
+  checkForCommand();
 }
 
 void startAdvertising()
@@ -469,7 +509,7 @@ void startAdvertising()
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(TAG_SERVICE_UUID);
   pServer->getAdvertising()->start();
-  Serial.println("Awaiting a client connection...");
+  log("Awaiting a client connection...\n");
 }
 
 void resetEncoder()
@@ -596,17 +636,15 @@ void parseNTPpacket()
   // combine the four bytes (two words) into a long integer
   // this is NTP time (seconds since Jan 1 1900):
   unsigned long utcTime = highWord << 16 | lowWord;
-  Serial.print("Seconds since Jan 1 1900 = " );
-  Serial.println(utcTime);
+  log("Seconds since Jan 1 1900 = %lu\n", utcTime);
 
   // now convert NTP time into everyday time:
-  Serial.print("Unix time = ");
   // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
   unsigned long seventyYears = 2208988800UL;
   // subtract seventy years:
   unsigned long epoch = utcTime - seventyYears;
   // print Unix time:
-  Serial.println(epoch);
+  log("Unix time = %lu", epoch);
 
   time_t localTime = myTimezone->toLocal((time_t)utcTime);
 
@@ -624,8 +662,7 @@ void parseNTPpacket()
   sprintf(&timeBuf[6], "%02d", secondNow); // print the second
   
   // print the hour, minute and second:
-  Serial.print("The time is ");
-  Serial.println(timeBuf);
+  log("The time is %s\n", timeBuf);
 }
 
 uint32_t Wheel(uint8_t WheelPos) 
@@ -640,5 +677,99 @@ uint32_t Wheel(uint8_t WheelPos)
   }
   WheelPos -= 170;
   return sspixel.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+}
+
+char cmdLine[100];
+int cmdLineLength = 0;
+bool cmdMode = false;
+
+void checkForCommand()
+{
+  int count = Serial.available();
+  while (count > 0) {
+    char ch = Serial.read();
+    if (ch == '\r' || ch == '\n') {
+      cmdLine[cmdLineLength] = '\0';
+      parseCommand(cmdLine);
+      cmdLineLength = 0;
+    }
+    else {
+      if (cmdLineLength < sizeof(cmdLine) - 1) {
+        cmdLine[cmdLineLength++] = ch;
+      }
+    }
+    --count;
+  }
+}
+
+void parseCommand(char *cmdLine)
+{
+  if (strlen(cmdLine) == 0) {
+    if (cmdMode) {
+      Serial.println("[ leaving command mode ]");
+      cmdMode = false;
+    }
+    else {
+      Serial.println("[ entering command mode ]");
+      cmdMode = true;
+    }
+  }
+  else {
+    char *cmd = strtok(cmdLine, " ");
+    if (cmd != NULL) {
+      if (strcmp(cmd, "set") == 0) {
+        const char *tag = strtok(NULL, " ");
+        if (tag == NULL) {
+          Serial.printf("usage: set <tag> <value>\n");
+        }
+        else {
+          const char *value = strtok(NULL, " ");
+          if (value == NULL) {
+            Serial.printf("usage: set <tag> <value>\n");
+          }
+          else {
+            prefs.begin("Settings", RW_MODE);
+            prefs.putString(tag, value);
+            prefs.end();
+          }
+        }
+
+      }
+      else if (strcmp(cmd, "get") == 0) {
+        const char *tag = strtok(NULL, " ");
+        if (tag == NULL) {
+          Serial.printf("usage: get <tag>\n");
+        }
+        else {
+            prefs.begin("Settings", RO_MODE);
+            if (prefs.isKey(tag)) {
+              String str = prefs.getString(tag);
+              const char *value = str.c_str();
+              Serial.printf("%s = %s\n", tag, value);
+            }
+            else {
+              Serial.printf("No value for '%s'\n", tag);
+            }
+            prefs.end();
+        }
+      }
+      else {
+        Serial.printf("Unknown command: %s\n", cmd);
+      }
+    }
+    cmdMode = true;
+  }
+}
+
+void log(const char *fmt, ...)
+{
+  if (!cmdMode) {
+    char buf[100];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    Serial.print(buf);
+  }
 }
 
