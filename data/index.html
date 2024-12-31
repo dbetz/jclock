@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>JClock Configuration</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="w3.css">
+  <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body onload='setup()'>
+  <div class="w3-container w3-teal">
+    <h1>JClock Configuration</h1>
+  </div>
+  <div class="w3-container">
+    <div class="w3-panel w3-padding-top-24">
+      <input type="range" min="0" max="127" value="0" class="slider" id="volumeSlider">
+    </div>
+    <div class="w3-panel">
+      <label>Volume: <span id="volumeValue"></span></label>
+    </div>
+  </div>
+  <div class="w3-container" id="credentials">
+    <form id="wifi-credentials-form" class="w3-container" onsubmit="return false;">
+      <h2>Wi-Fi Settings</h2>
+      <div class="w3-panel">
+        <label>Wi-Fi SSID</label>
+        <input class="w3-input w3-border" type="text" name="ssid">
+      </div>
+      <div class="w3-panel w3-padding-top-24">
+        <label>Wi-Fi password (if needed)</label>
+        <input class="w3-input w3-border" type="text" name="passwd">
+      </div>
+      <div class="w3-panel w3-padding-top-24">
+        <button type="button" class="w3-btn w3-black onclick="connect()">Connect</button>
+      </div>
+    </form>
+  </div>
+  <script>
+    var volumeSlider = document.getElementById("volumeSlider");
+    var volumeValue = document.getElementById("volumeValue");
+    var credentials = document.getElementById("credentials");
+
+    volumeValue.innerHTML = volumeSlider.value;
+  
+    var currentVolume = 0;
+  
+    function setup() {
+      currentVolume = getVolume();
+      showVolume(currentVolume);
+      credentials.hidden = getConfigMode() ? false : true;
+    }
+    
+    function getConfigMode() {
+      var req = new XMLHttpRequest();
+      req.open('GET', "/config-mode", false);
+      req.send();
+      return parseInt(req.responseText) != 0;
+    }
+    
+    function getVolume() {
+      var req = new XMLHttpRequest();
+      req.open('GET', "/volume", false);
+      req.send();
+      return parseInt(req.responseText);
+    }
+    
+    function setVolume() {
+      var body = encodeURIComponent("volume") + "=" + encodeURIComponent(currentVolume);
+      var req = new XMLHttpRequest();
+      req.open('POST', "/set-volume", false);
+      req.setRequestHeader("Content-Type", "application/x-www-form-urlencoded"); 
+      req.send(body);
+    }
+
+    function connect() {
+      var req = new XMLHttpRequest();
+      var elements = document.getElementById('wifi-credentials-form').elements;
+      var body = "";
+      for (const element of elements) {
+        if (body != "") body += "&";
+        body += encodeURIComponent(element.name) + "=" + encodeURIComponent(element.value);
+      }
+      req.open('POST', "/connect", false);
+      req.setRequestHeader("Content-Type", "application/x-www-form-urlencoded"); 
+      req.send(body);
+    }
+
+    function showVolume(volume) {
+      volumeSlider.value = volume;
+      volumeValue.innerHTML = currentVolume;
+    }
+    
+    volumeSlider.oninput = function() {
+      currentVolume = this.value;
+      volumeValue.innerHTML = currentVolume;
+      setVolume(currentVolume);
+    }
+  </script>
+</body>
+</html>

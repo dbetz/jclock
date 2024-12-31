@@ -1,0 +1,17 @@
+body {
+  background-color: #FFFFFF;
+}
+
+table, th, td {
+  border: 1px solid black;
+  border-collapse: collapse;
+}
+
+th {
+  text-align: center;
+}
+
+.slider {
+  width: 100%; /* Full-width */
+  height: 25px; /* Specified height */
+}

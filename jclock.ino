@@ -30,7 +30,7 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include <DS3231.h>
 #include "Audio.h"
 #include "SD.h"
-#include "FS.h"
+#include "LittleFS.h"
 
 #include <Preferences.h>
 #define RW_MODE false
@@ -44,7 +44,8 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-#include <Timezone.h>
+#include "settings.h"
+#include "configServer.h"
 
 // microSD Card Reader connections
 #define SD_CS          5
@@ -57,67 +58,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #define I2S_BCLK      11
 #define I2S_LRC       13
  
-Preferences prefs;
-
-String ssid;
-String pass;
-
-// US Eastern Time Zone
-TimeChangeRule usEDT = {"EDT", Second, Sun, Mar, 2, -240};    // Daylight time = UTC - 4 hours
-TimeChangeRule usEST = {"EST", First,  Sun, Nov, 2, -300};    // Standard time = UTC - 5 hours
-Timezone usEastern(usEDT, usEST);
-
-// US Central Time Zone
-TimeChangeRule usCDT = {"CDT", Second, Sun, Mar, 2, -300};    // Daylight time = UTC - 5 hours
-TimeChangeRule usCST = {"CST", First,  Sun, Nov, 2, -360};    // Standard time = UTC - 6 hours
-Timezone usCentral(usCDT, usCST);
-
-// US Mountain Time Zone
-TimeChangeRule usMDT = {"MDT", Second, Sun, Mar, 2, -360};    // Daylight time = UTC - 6 hours
-TimeChangeRule usMST = {"MST", First,  Sun, Nov, 2, -420};    // Standard time = UTC - 7 hours
-Timezone usMountain(usMDT, usMST);
-
-// Arizona is US Mountain Time Zone but does not use DST
-Timezone usAZ(usMST);
-
-// US Pacific Time Zone
-TimeChangeRule usPDT = {"PDT", Second, Sun, Mar, 2, -420};    // Daylight time = UTC - 7 hours
-TimeChangeRule usPST = {"PST", First,  Sun, Nov, 2, -480};    // Standard time = UTC - 8 hours
-Timezone usPacific(usPDT, usPST);
-
-// Finland Time Zone
-TimeChangeRule finlandDT = {"FDT", Last, Sun, Mar, 3, 180};   // Daylight time = UTC + 3 hours
-TimeChangeRule finlandST = {"FST", Last,  Sun, Oct, 4, 120};  // Standard time = UTC + 2 hours
-Timezone finland(finlandDT, finlandST);
-
-struct NamedTimezone {
-  const char *name;
-  Timezone *timezone;
-};
-
-NamedTimezone timezones[] = {
-  { "US-Eastern",   &usEastern  },
-  { "US-Central",   &usCentral  },
-  { "US-Mountain",  &usMountain },
-  { "US-Arizona",   &usAZ       },
-  { "US-Pacific",   &usPacific  },
-  { "Finland",      &finland    }
-};
-int timezoneCount = sizeof(timezones) / sizeof(timezones[0]);
-
-Timezone *findTimezone(const char *name)
-{
-  for (int i = 0; i < timezoneCount; ++i) {
-    if (strcmp(name, timezones[i].name) == 0) {
-      return timezones[i].timezone;
-    }
-  }
-  return NULL;
-}
-
-// change this to match your current timezone
-Timezone *myTimezone = &usEastern;
-
 RTClib rtcLib;
 DS3231 rtc;
 
@@ -141,8 +81,6 @@ enum class EncoderState {
 EncoderState encoderState = EncoderState::TIME;
 int32_t encoderCount;
 unsigned long encoderLastMoved;
-
-bool encoderButtonState = false;
 
 unsigned long timeRemaining;
 unsigned long secondStartTime;
@@ -201,8 +139,6 @@ WiFiUDP udp;
 //#define NTP_INTERVAL  (10 * 1000)
 
 unsigned long lastNtpRequestTime;
-
-bool showPM = false;
 
 Adafruit_7segment display = Adafruit_7segment();
 
@@ -269,6 +205,8 @@ void setup()
                 
   log("jclock\n");
 
+  settingsInit();
+
   if (maxlipo.begin()) {
     log("Found MAX17048 with Chip ID: 0x%02x\n", maxlipo.getChipID()); 
   }
@@ -276,28 +214,12 @@ void setup()
     log("Can't find MAX17048\n");
   }
 
-  prefs.begin("Settings", RW_MODE);
-
-  //prefs.clear();
-
-  ssid = prefs.getString("SSID", String("NONE"));
-  pass = prefs.getString("Password", String("NONE"));
-
-  String timezoneStr = prefs.getString("Timezone", String("US-Eastern"));
-  Timezone *timezone = findTimezone(timezoneStr.c_str());
-  if (timezone == NULL) {
-    log("No timezone '%s'\n", timezoneStr.c_str());
-  }
-  else {
-    log("Timzone is %s\n", timezoneStr.c_str());
-    myTimezone = timezone;
+    // start the flash filesystem
+  if (!LittleFS.begin()) {
+    log("An Error has occurred while mounting LittleFS\n");
+    while(true); 
   }
 
-  String showPMstr = prefs.getString("ShowPM", String("false"));
-  showPM = strcmp(showPMstr.c_str(), "true") == 0;
-
-  prefs.end();
-  
   // Start microSD Card
   if (!SD.begin(SD_CS)) {
     log("Error accessing microSD card!\n");
@@ -345,9 +267,8 @@ void setup()
   ss.setGPIOInterrupts((uint32_t)1 << SS_SWITCH, 1);
   ss.enableEncoderInterrupt();
 
-  // We start by connecting to a WiFi network
-  log("Connecting to '%s'\n", ssid.c_str());
-  WiFi.begin(ssid.c_str(), pass.c_str());
+  // We start by connecting to a WiFi network and starting the configuration web server
+  configServerStart(ssid, passwd);
   
   // Create the BLE Device
   BLEDevice::init(bleServerName);
@@ -388,7 +309,7 @@ void setup()
   batterySampleTime = millis();
 }
 
-bool wifiConnected = false;
+bool udpStarted = false;
 bool getNTPserver = false;
 bool requestTime = false;
 bool parseTime = false;
@@ -399,23 +320,17 @@ void loop()
 
   audio.loop();    
 
-  if ((currentTime - batterySampleTime) >= 1000) {
+  if ((currentTime - batterySampleTime) >= 10 * 60 * 1000) {
     batterySampleTime = currentTime;
     log("Batt Voltage: %g V\n", maxlipo.cellVoltage());
     log("Batt Percent: %g %%\n\n", maxlipo.cellPercent());
   }
 
   // check to see if wifi is connected
-  if (!wifiConnected) {
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiConnected = true;
+  if (!udpStarted) {
+    if (wifiConnected) {
+      udpStarted = true;
       getNTPserver = true;
-    
-      log("WiFi connected\n");
-      
-      localIP = WiFi.localIP();
-      log("IP address: %s\n", localIP.toString().c_str());
-    
       log("Starting UDP on port %d\n", localPort);
       udp.begin(localPort);
     }
@@ -468,7 +383,8 @@ void loop()
     case EncoderState::COUNTING:
       displayTimeRemaining();
       if (timeRemaining <= 0) {
-        audio.connecttoFS(SD,"/0001.mp3");
+        //audio.connecttoFS(LittleFS, "bell.mp3");
+        audio.connecttoFS(SD, "0001.mp3");
         encoderState = EncoderState::TIME;
         resetEncoder();
       }
@@ -492,7 +408,7 @@ void loop()
     }
   }
 
-  myButton.update(!ss.digitalRead(SS_SWITCH));
+  myButton.update(ss.digitalRead(SS_SWITCH));
 
   int32_t newCount = ss.getEncoderPosition();
   if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
@@ -501,6 +417,9 @@ void loop()
     encoderLastMoved = currentTime;
   }
 
+  // check for web server requests
+  configServerLoop();
+  
   checkForCommand();
 }
 
@@ -644,9 +563,9 @@ void parseNTPpacket()
   // subtract seventy years:
   unsigned long epoch = utcTime - seventyYears;
   // print Unix time:
-  log("Unix time = %lu", epoch);
+  log("Unix time = %lu\n", epoch);
 
-  time_t localTime = myTimezone->toLocal((time_t)utcTime);
+  time_t localTime = timezone->toLocal((time_t)utcTime);
 
   rtc.setEpoch(localTime, true);
 
@@ -663,20 +582,6 @@ void parseNTPpacket()
   
   // print the hour, minute and second:
   log("The time is %s\n", timeBuf);
-}
-
-uint32_t Wheel(uint8_t WheelPos) 
-{
-  WheelPos = 255 - WheelPos;
-  if (WheelPos < 85) {
-    return sspixel.Color(255 - WheelPos * 3, 0, WheelPos * 3);
-  }
-  if (WheelPos < 170) {
-    WheelPos -= 85;
-    return sspixel.Color(0, WheelPos * 3, 255 - WheelPos * 3);
-  }
-  WheelPos -= 170;
-  return sspixel.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
 }
 
 char cmdLine[100];
@@ -728,9 +633,7 @@ void parseCommand(char *cmdLine)
             Serial.printf("usage: set <tag> <value>\n");
           }
           else {
-            prefs.begin("Settings", RW_MODE);
-            prefs.putString(tag, value);
-            prefs.end();
+            setStringSetting(tag, value);
           }
         }
 
@@ -741,16 +644,13 @@ void parseCommand(char *cmdLine)
           Serial.printf("usage: get <tag>\n");
         }
         else {
-            prefs.begin("Settings", RO_MODE);
-            if (prefs.isKey(tag)) {
-              String str = prefs.getString(tag);
-              const char *value = str.c_str();
+          char value[100];
+          if (getStringSetting(tag, value, sizeof(value))) {
               Serial.printf("%s = %s\n", tag, value);
-            }
-            else {
-              Serial.printf("No value for '%s'\n", tag);
-            }
-            prefs.end();
+          }
+          else {
+            Serial.printf("No value for '%s'\n", tag);
+          }
         }
       }
       else {
