@@ -8,7 +8,7 @@
 
 // soft AP
 const char *AP_ssid_prefix = "JClock";
-const char *AP_password = "jclock99";
+const char *AP_password = "jclock86";
 IPAddress local_ip(192,168,1,1);
 IPAddress gateway(192,168,1,1);
 IPAddress subnet(255,255,255,0);
@@ -23,6 +23,16 @@ WebServer webServer;
 
 static void setConfigMode(bool mode);
 static bool handleFileRead(String path);
+
+const char timezoneList[] = "\
+[\n\
+  \"US-Eastern\",\n\
+  \"US-Central\",\n\
+  \"US-Mountain\",\n\
+  \"US-Arizona\",\n\
+  \"US-Pacific\",\n\
+  \"Finland\"\n\
+]";
 
 void configServerStart(String ssid, String passwd)
 {
@@ -83,6 +93,18 @@ void configServerStart(String ssid, String passwd)
     if (webServer.hasArg("volume")) {
       wiperValue = webServer.arg("volume").toInt();
     }
+    webServer.send(200, "text/html", "");
+  });
+
+  webServer.on("/timezone-options", []() {
+    Serial.println("Got /timezone-options request");
+    webServer.send(200, "application/json", timezoneList);
+  });
+
+  webServer.on("/save-settings", []() {
+    Serial.println("Got /save-settings request");
+    //updateSettings();
+    //storeSettings();
     webServer.send(200, "text/html", "");
   });
 

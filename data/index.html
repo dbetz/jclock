@@ -30,8 +30,18 @@
         <input class="w3-input w3-border" type="text" name="passwd">
       </div>
       <div class="w3-panel w3-padding-top-24">
-        <button type="button" class="w3-btn w3-black onclick="connect()">Connect</button>
+        <button type="button" class="w3-btn w3-black" onclick="connect()">Connect</button>
       </div>
+    </form>
+  </div>
+  <div class="w3-container" id="credentials">
+    <form id="settings-form" onsubmit="return false;">
+      <h2>JClock Configuration</h2>
+      <h3>Timezone</h3>
+      <select name="timezone" id="timezone"></select>
+      <p>
+        <button type="button" onclick="saveSettings()">Save</button>
+      </p>
     </form>
   </div>
   <script>
@@ -46,6 +56,7 @@
     function setup() {
       currentVolume = getVolume();
       showVolume(currentVolume);
+      setupTimezones();
       credentials.hidden = getConfigMode() ? false : true;
     }
     
@@ -67,6 +78,37 @@
       var body = encodeURIComponent("volume") + "=" + encodeURIComponent(currentVolume);
       var req = new XMLHttpRequest();
       req.open('POST', "/set-volume", false);
+      req.setRequestHeader("Content-Type", "application/x-www-form-urlencoded"); 
+      req.send(body);
+    }
+
+    function getTimezoneOptions() {
+      var req = new XMLHttpRequest();
+      req.open('GET', "/timezone-options", false);
+      req.send();
+      return JSON.parse(req.responseText);
+    }
+    
+    function setupTimezones() {
+      var timezones = getTimezoneOptions();
+      for (var i = 0; i < timezones.length; ++i) {
+        var newOption = document.createElement('option');
+        var timezone = timezones[i];
+        optionHTML = "<option value='" + timezone + "'>" + timezone + "</option>";
+        newOption.innerHTML = optionHTML;
+        document.getElementById('timezone').add(newOption);
+      }
+    }
+    
+    function saveSettings() {
+      var req = new XMLHttpRequest();
+      var elements = document.getElementById('settings-form').elements;
+      var body = "";
+      for (const element of elements) {
+        if (body != "") body += "&";
+        body += encodeURIComponent(element.name) + "=" + encodeURIComponent(element.value);
+      }
+      req.open('POST', "/save-settings", false);
       req.setRequestHeader("Content-Type", "application/x-www-form-urlencoded"); 
       req.send(body);
     }
