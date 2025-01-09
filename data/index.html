@@ -56,7 +56,7 @@
     function setup() {
       currentVolume = getVolume();
       showVolume(currentVolume);
-      setupTimezones();
+      setupTimezone();
       credentials.hidden = getConfigMode() ? false : true;
     }
     
@@ -82,6 +82,13 @@
       req.send(body);
     }
 
+    function getTimezone() {
+      var req = new XMLHttpRequest();
+      req.open('GET', "/timezone", false);
+      req.send();
+      return req.responseText;
+    }
+    
     function getTimezoneOptions() {
       var req = new XMLHttpRequest();
       req.open('GET', "/timezone-options", false);
@@ -89,14 +96,19 @@
       return JSON.parse(req.responseText);
     }
     
-    function setupTimezones() {
+    function setupTimezone() {
+      var select = document.getElementById('timezone');
       var timezones = getTimezoneOptions();
+      var currentTimezone = getTimezone();
       for (var i = 0; i < timezones.length; ++i) {
-        var newOption = document.createElement('option');
+        var option = document.createElement('option');
         var timezone = timezones[i];
         optionHTML = "<option value='" + timezone + "'>" + timezone + "</option>";
-        newOption.innerHTML = optionHTML;
-        document.getElementById('timezone').add(newOption);
+        option.innerHTML = optionHTML;
+        if (timezone == currentTimezone) {
+          option.selected = true
+        }
+        select.add(option);
       }
     }
     

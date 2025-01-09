@@ -47,6 +47,32 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "settings.h"
 #include "configServer.h"
 
+/* wiring: (module pin - ESP32 pin)
+
+i2s Audio Module
+================
+VIN - 3v3
+GND - GND
+SD -
+GAIN - GND
+DIN - 12
+BCLK - 11
+LRC - 13
+
+SD Module
+=========
+GND - GND
+MISO - MI
+CLK - SCK
+MOSI - MO
+CS - 5
+3v3 - 3v3
+
+Config Mode Button
+GND - 6
+
+*/
+
 // microSD Card Reader connections
 #define SD_CS          5
 #define SPI_MOSI      35 
@@ -197,6 +223,8 @@ class MyColorCallbackHandler : public BLECharacteristicCallbacks {
 };
 
 unsigned long batterySampleTime;
+bool flashFilesystemMounted = false;
+bool sdFilesystemMounted = false;
 
 void setup()
 {
@@ -215,15 +243,19 @@ void setup()
   }
 
     // start the flash filesystem
-  if (!LittleFS.begin()) {
+  if (LittleFS.begin()) {
+    flashFilesystemMounted = true;
+  }
+  else {
     log("An Error has occurred while mounting LittleFS\n");
-    while(true); 
   }
 
   // Start microSD Card
-  if (!SD.begin(SD_CS)) {
+  if (SD.begin(SD_CS)) {
+    sdFilesystemMounted = true;
+  }
+  else {
     log("Error accessing microSD card!\n");
-    while(true); 
   }
   
   // Setup I2S 
@@ -383,8 +415,12 @@ void loop()
     case EncoderState::COUNTING:
       displayTimeRemaining();
       if (timeRemaining <= 0) {
-        //audio.connecttoFS(LittleFS, "bell.mp3");
-        audio.connecttoFS(SD, "0001.mp3");
+        if (flashFilesystemMounted) {
+          audio.connecttoFS(LittleFS, "bell.mp3");
+        }
+        else if (sdFilesystemMounted) {
+          audio.connecttoFS(SD, "bell.mp3");
+        }
         encoderState = EncoderState::TIME;
         resetEncoder();
       }

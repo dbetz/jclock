@@ -8,6 +8,7 @@ Preferences prefs;
 
 String ssid;
 String passwd;
+String timezoneName;
 Timezone *timezone;
 bool showPM;
 
@@ -51,19 +52,25 @@ void settingsInit()
   passwd = prefs.getString("Password", String());
 
   String timezoneStr = prefs.getString("Timezone", String("US-Eastern"));
-  Timezone *newTimezone = findTimezone(timezoneStr.c_str());
-  if (newTimezone == NULL) {
-    Serial.printf("No timezone '%s'\n", timezoneStr.c_str());
-  }
-  else {
-    Serial.printf("Timezone is %s\n", timezoneStr.c_str());
-    timezone = newTimezone;
-  }
+  setTimezoneSetting(timezoneStr);
 
   String showPMstr = prefs.getString("ShowPM", String("false"));
   showPM = strcmp(showPMstr.c_str(), "true") == 0;
 
   prefs.end();
+}
+
+void setTimezoneSetting(String timezoneStr)
+{
+  Timezone *newTimezone = findTimezone(timezoneStr.c_str());
+  if (newTimezone == NULL) {
+    Serial.printf("No timezone '%s'\n", timezoneStr.c_str());
+  }
+  else {
+    Serial.printf("Timezone is '%s'\n", timezoneStr.c_str());
+    timezoneName = timezoneStr;
+    timezone = newTimezone;
+  }
 }
 
 bool getStringSetting(const char *tag, char *value, size_t valueSize)

@@ -96,6 +96,19 @@ void configServerStart(String ssid, String passwd)
     webServer.send(200, "text/html", "");
   });
 
+  webServer.on("/set-timezone", HTTP_POST, []() {
+    Serial.print("Got /set-timezone request");
+    if (webServer.hasArg("timezone")) {
+      wiperValue = webServer.arg("volume").toInt();
+    }
+    webServer.send(200, "text/html", "");
+  });
+
+  webServer.on("/timezone", []() {
+    Serial.println("Got /timezone request");
+    webServer.send(200, "text/html", timezoneName);
+  });
+
   webServer.on("/timezone-options", []() {
     Serial.println("Got /timezone-options request");
     webServer.send(200, "application/json", timezoneList);
@@ -103,8 +116,10 @@ void configServerStart(String ssid, String passwd)
 
   webServer.on("/save-settings", []() {
     Serial.println("Got /save-settings request");
-    //updateSettings();
-    //storeSettings();
+    if (webServer.hasArg("timezone")) {
+      String value = webServer.arg("timezone");
+      setTimezoneSetting(value.c_str());
+    }
     webServer.send(200, "text/html", "");
   });
 
