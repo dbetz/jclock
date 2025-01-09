@@ -47,6 +47,11 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "settings.h"
 #include "configServer.h"
 
+// Board: Adafruit Feather ESP32-S3
+// Flash Mode: QIO 80MHz
+// Flash Size: 4MG (32Mb)
+// Partition Scheme: Huge APP (3MB No OTA, 1MB SPIFFS)
+
 /* wiring: (module pin - ESP32 pin)
 
 i2s Audio Module
