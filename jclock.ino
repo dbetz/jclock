@@ -17,8 +17,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 */
 
-#include <stdarg.h>
-
 #include <Wire.h>
 #include <TimeLib.h>
 #include <Adafruit_GFX.h>
@@ -38,11 +36,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 #include <WiFi.h>
 #include <WiFiClient.h>
-
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 
 #include "settings.h"
 #include "configServer.h"
@@ -129,7 +122,7 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 static void buttonHandler(uint8_t btnId, uint8_t btnState) 
 {
   if (btnState == BTN_PRESSED) {
-    log("Pushed button\n");
+    Serial.printf("Pushed button\n");
     switch (encoderState) {
     case EncoderState::ADJUSTING:
       encoderState = EncoderState::COUNTING;
@@ -145,7 +138,7 @@ static void buttonHandler(uint8_t btnId, uint8_t btnState)
   } 
   else {
     // btnState == BTN_OPEN.
-    log("Released button\n");
+    Serial.printf("Released button\n");
   }
 }
 
@@ -173,60 +166,6 @@ unsigned long lastNtpRequestTime;
 
 Adafruit_7segment display = Adafruit_7segment();
 
-//BLE server name
-#define bleServerName "JClock"
-
-// See the following for generating UUIDs:
-// https://www.uuidgenerator.net/
-
-#define TAG_SERVICE_UUID "9517ee93-7909-49e9-aa40-1bd9b825e0d3"
-#define TAG_IMAGE_CHARACTERISTIC_UUID "00767412-ac3b-4e86-8941-1fb7f70c87f1"
-#define TAG_COLOR_CHARACTERISTIC_UUID "d0dca24b-399b-4b07-baa3-0db90835d742"
-
-bool bleConnected = false;
-BLEServer *pServer;
-BLECharacteristic *pImageCharacteristic;
-BLECharacteristic *pColorCharacteristic;
-
-//Setup callbacks onConnect and onDisconnect
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    log("Connected\n");
-    bleConnected = true;
-  };
-  void onDisconnect(BLEServer* pServer) {
-    log("Disconnected\n");
-    bleConnected = false;
-    startAdvertising();
-  }
-};
-
-class MyImageCallbackHandler : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* pCharacteristic) {
-    uint8_t *data = pCharacteristic->getData();
-    size_t length = pCharacteristic->getLength();
-
-    log("Image:");
-    for (size_t i = 0; i < length; ++i) {
-      log(" %02x", data[i]);
-    }
-    log("\n");
-  }
-};
-
-class MyColorCallbackHandler : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* pCharacteristic) {
-    uint8_t *data = pCharacteristic->getData();
-    size_t length = pCharacteristic->getLength();
-
-    log("Color:");
-    for (size_t i = 0; i < length; ++i) {
-      log(" %02x", data[i]);
-    }
-    log("\n");
-  }
-};
-
 unsigned long batterySampleTime;
 bool flashFilesystemMounted = false;
 bool sdFilesystemMounted = false;
@@ -236,15 +175,15 @@ void setup()
   Serial.begin(115200);
   delay(1000);
                 
-  log("jclock\n");
+  Serial.printf("jclock\n");
 
   settingsInit();
 
   if (maxlipo.begin()) {
-    log("Found MAX17048 with Chip ID: 0x%02x\n", maxlipo.getChipID()); 
+    Serial.printf("Found MAX17048 with Chip ID: 0x%02x\n", maxlipo.getChipID()); 
   }
   else {
-    log("Can't find MAX17048\n");
+    Serial.printf("Can't find MAX17048\n");
   }
 
     // start the flash filesystem
@@ -252,7 +191,7 @@ void setup()
     flashFilesystemMounted = true;
   }
   else {
-    log("An Error has occurred while mounting LittleFS\n");
+    Serial.printf("An Error has occurred while mounting LittleFS\n");
   }
 
   // Start microSD Card
@@ -260,7 +199,7 @@ void setup()
     sdFilesystemMounted = true;
   }
   else {
-    log("Error accessing microSD card!\n");
+    Serial.printf("Error accessing microSD card!\n");
   }
   
   // Setup I2S 
@@ -274,17 +213,17 @@ void setup()
   display.begin(I2C_DISPLAY);
 
   if (!ss.begin(I2C_ENCODER) || !sspixel.begin(I2C_ENCODER)) {
-    log("Couldn't find seesaw on default address\n");
+    Serial.printf("Couldn't find seesaw on default address\n");
     while(1) delay(10);
   }
-  log("seesaw started\n");
+  Serial.printf("seesaw started\n");
 
   uint32_t version = ((ss.getVersion() >> 16) & 0xFFFF);
   if (version  != 4991){
-    log("Wrong firmware loaded? %u\n", version);
+    Serial.printf("Wrong firmware loaded? %u\n", version);
     while(1) delay(10);
   }
-  log("Found Product 4991\n");
+  Serial.printf("Found Product 4991\n");
 
   // set not so bright!
   sspixel.setBrightness(20);
@@ -299,50 +238,13 @@ void setup()
   // go back to the clock display if the encoder hasn't been moved in 10 seconds
   encoderLastMoved = millis() - 10000;
 
-  log("Turning on interrupts\n");
+  Serial.printf("Turning on interrupts\n");
   delay(10);
   ss.setGPIOInterrupts((uint32_t)1 << SS_SWITCH, 1);
   ss.enableEncoderInterrupt();
 
   // We start by connecting to a WiFi network and starting the configuration web server
   configServerStart(ssid, passwd);
-  
-  // Create the BLE Device
-  BLEDevice::init(bleServerName);
-
-  // Create the BLE Server
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  // Create the BLE Service
-  BLEService *bmeService = pServer->createService(TAG_SERVICE_UUID);
-
-  pImageCharacteristic = bmeService->createCharacteristic(TAG_IMAGE_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
-  pImageCharacteristic->setCallbacks(new MyImageCallbackHandler);
-
-  pColorCharacteristic = bmeService->createCharacteristic(TAG_COLOR_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
-  pColorCharacteristic->setCallbacks(new MyColorCallbackHandler);
-
-/*
-  // Create BLE Characteristics and Create a BLE Descriptor
-
-  // Temperature
-  bmeService->addCharacteristic(&bmeTemperatureCelsiusCharacteristics);
-  bmeTemperatureCelsiusDescriptor.setValue("BME temperature Celsius");
-  bmeTemperatureCelsiusCharacteristics.addDescriptor(&bmeTemperatureCelsiusDescriptor);
-
-  // Humidity
-  bmeService->addCharacteristic(&bmeHumidityCharacteristics);
-  bmeHumidityDescriptor.setValue("BME humidity");
-  bmeHumidityCharacteristics.addDescriptor(new BLE2902());
-*/
-
-  // Start the service
-  bmeService->start();
-
-  // Start advertising
-  startAdvertising();
-
   batterySampleTime = millis();
 }
 
@@ -359,8 +261,8 @@ void loop()
 
   if ((currentTime - batterySampleTime) >= 10 * 60 * 1000) {
     batterySampleTime = currentTime;
-    log("Batt Voltage: %g V\n", maxlipo.cellVoltage());
-    log("Batt Percent: %g %%\n\n", maxlipo.cellPercent());
+    Serial.printf("Batt Voltage: %g V\n", maxlipo.cellVoltage());
+    Serial.printf("Batt Percent: %g %%\n\n", maxlipo.cellPercent());
   }
 
   // check to see if wifi is connected
@@ -368,8 +270,9 @@ void loop()
     if (wifiConnected) {
       udpStarted = true;
       getNTPserver = true;
-      log("Starting UDP on port %d\n", localPort);
+      Serial.printf("Starting UDP on port %d\n", localPort);
       udp.begin(localPort);
+      //audio.connecttohost("https://nhpr.streamguys1.com/nhpr");
     }
   }
 
@@ -380,13 +283,13 @@ void loop()
       requestTime = true;
       //get a random server from the pool
       WiFi.hostByName(ntpServerName, timeServerIP);
-      log("NTP server IP address: %s\n", timeServerIP.toString().c_str());
+      Serial.printf("NTP server IP address: %s\n", timeServerIP.toString().c_str());
     }
 
     else if (requestTime) {
       requestTime = false;
       parseTime = true;
-      log("sending NTP packet...\n");
+      Serial.printf("sending NTP packet...\n");
       sendNTPpacket(timeServerIP); // send an NTP packet to a time server
     }
     
@@ -395,7 +298,7 @@ void loop()
       if (len != 0) {
         parseTime = false;
         lastNtpRequestTime = currentTime;
-        log("packet received, length=%d\n", len);
+        Serial.printf("packet received, length=%d\n", len);
         // We've received a packet, read the data from it
         udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
         parseNTPpacket();
@@ -404,72 +307,16 @@ void loop()
 
     else {
       if (currentTime - lastNtpRequestTime >= NTP_INTERVAL) {
-        log("Sending a new NTP request\n");
+        Serial.printf("Sending a new NTP request\n");
         getNTPserver = true;
       }
     }
   }
 
-  switch (encoderState) {
-    case EncoderState::TIME:
-      displayTime();
-      break;
-    case EncoderState::ADJUSTING:
-      displayCounter();
-      break;
-    case EncoderState::COUNTING:
-      displayTimeRemaining();
-      if (timeRemaining <= 0) {
-        if (flashFilesystemMounted) {
-          audio.connecttoFS(LittleFS, "bell.mp3");
-        }
-        else if (sdFilesystemMounted) {
-          audio.connecttoFS(SD, "bell.mp3");
-        }
-        encoderState = EncoderState::TIME;
-        resetEncoder();
-      }
-      break;
-    default:
-      encoderState = EncoderState::TIME;
-      resetEncoder();
-      break;
-  }
-
-  // go back to displaying the time if the encoder hasn't been turned in 10 seconds
-  if (encoderState == EncoderState::ADJUSTING && (currentTime - encoderLastMoved) >= 10000) {
-    encoderState = EncoderState::TIME;
-    resetEncoder();
-  }
-
-  if (encoderState == EncoderState::COUNTING) {
-    if ((currentTime - secondStartTime) >= 1000) {
-      secondStartTime += 1000;
-      timeRemaining -= 1000;
-    }
-  }
-
-  myButton.update(ss.digitalRead(SS_SWITCH));
-
-  int32_t newCount = ss.getEncoderPosition();
-  if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
-    encoderCount = newCount;
-    encoderState = EncoderState::ADJUSTING;
-    encoderLastMoved = currentTime;
-  }
-
   // check for web server requests
   configServerLoop();
-  
-  checkForCommand();
-}
 
-void startAdvertising()
-{
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(TAG_SERVICE_UUID);
-  pServer->getAdvertising()->start();
-  log("Awaiting a client connection...\n");
+  handleEncoder(currentTime);
 }
 
 void resetEncoder()
@@ -596,7 +443,7 @@ void parseNTPpacket()
   // combine the four bytes (two words) into a long integer
   // this is NTP time (seconds since Jan 1 1900):
   unsigned long utcTime = highWord << 16 | lowWord;
-  log("Seconds since Jan 1 1900 = %lu\n", utcTime);
+  Serial.printf("Seconds since Jan 1 1900 = %lu\n", utcTime);
 
   // now convert NTP time into everyday time:
   // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
@@ -604,7 +451,7 @@ void parseNTPpacket()
   // subtract seventy years:
   unsigned long epoch = utcTime - seventyYears;
   // print Unix time:
-  log("Unix time = %lu\n", epoch);
+  Serial.printf("Unix time = %lu\n", epoch);
 
   time_t localTime = timezone->toLocal((time_t)utcTime);
 
@@ -622,95 +469,56 @@ void parseNTPpacket()
   sprintf(&timeBuf[6], "%02d", secondNow); // print the second
   
   // print the hour, minute and second:
-  log("The time is %s\n", timeBuf);
+  Serial.printf("The time is %s\n", timeBuf);
 }
 
-char cmdLine[100];
-int cmdLineLength = 0;
-bool cmdMode = false;
-
-void checkForCommand()
+void handleEncoder(unsigned long currentTime)
 {
-  int count = Serial.available();
-  while (count > 0) {
-    char ch = Serial.read();
-    if (ch == '\r' || ch == '\n') {
-      cmdLine[cmdLineLength] = '\0';
-      parseCommand(cmdLine);
-      cmdLineLength = 0;
-    }
-    else {
-      if (cmdLineLength < sizeof(cmdLine) - 1) {
-        cmdLine[cmdLineLength++] = ch;
+  switch (encoderState) {
+    case EncoderState::TIME:
+      displayTime();
+      break;
+    case EncoderState::ADJUSTING:
+      displayCounter();
+      break;
+    case EncoderState::COUNTING:
+      displayTimeRemaining();
+      if (timeRemaining <= 0) {
+        if (flashFilesystemMounted) {
+          audio.connecttoFS(LittleFS, "bell.mp3");
+        }
+        else if (sdFilesystemMounted) {
+          audio.connecttoFS(SD, "bell.mp3");
+        }
+        encoderState = EncoderState::TIME;
+        resetEncoder();
       }
+      break;
+    default:
+      encoderState = EncoderState::TIME;
+      resetEncoder();
+      break;
+  }
+
+  // go back to displaying the time if the encoder hasn't been turned in 10 seconds
+  if (encoderState == EncoderState::ADJUSTING && (currentTime - encoderLastMoved) >= 10000) {
+    encoderState = EncoderState::TIME;
+    resetEncoder();
+  }
+
+  if (encoderState == EncoderState::COUNTING) {
+    if ((currentTime - secondStartTime) >= 1000) {
+      secondStartTime += 1000;
+      timeRemaining -= 1000;
     }
-    --count;
+  }
+
+  myButton.update(ss.digitalRead(SS_SWITCH));
+
+  int32_t newCount = ss.getEncoderPosition();
+  if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
+    encoderCount = newCount;
+    encoderState = EncoderState::ADJUSTING;
+    encoderLastMoved = currentTime;
   }
 }
-
-void parseCommand(char *cmdLine)
-{
-  if (strlen(cmdLine) == 0) {
-    if (cmdMode) {
-      Serial.println("[ leaving command mode ]");
-      cmdMode = false;
-    }
-    else {
-      Serial.println("[ entering command mode ]");
-      cmdMode = true;
-    }
-  }
-  else {
-    char *cmd = strtok(cmdLine, " ");
-    if (cmd != NULL) {
-      if (strcmp(cmd, "set") == 0) {
-        const char *tag = strtok(NULL, " ");
-        if (tag == NULL) {
-          Serial.printf("usage: set <tag> <value>\n");
-        }
-        else {
-          const char *value = strtok(NULL, " ");
-          if (value == NULL) {
-            Serial.printf("usage: set <tag> <value>\n");
-          }
-          else {
-            setStringSetting(tag, value);
-          }
-        }
-
-      }
-      else if (strcmp(cmd, "get") == 0) {
-        const char *tag = strtok(NULL, " ");
-        if (tag == NULL) {
-          Serial.printf("usage: get <tag>\n");
-        }
-        else {
-          char value[100];
-          if (getStringSetting(tag, value, sizeof(value))) {
-              Serial.printf("%s = %s\n", tag, value);
-          }
-          else {
-            Serial.printf("No value for '%s'\n", tag);
-          }
-        }
-      }
-      else {
-        Serial.printf("Unknown command: %s\n", cmd);
-      }
-    }
-    cmdMode = true;
-  }
-}
-
-void log(const char *fmt, ...)
-{
-  if (!cmdMode) {
-    char buf[100];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    Serial.print(buf);
-  }
-}
-
