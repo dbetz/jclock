@@ -10,6 +10,10 @@
 
 /*
 
+Medidation bell sounds:
+
+https://pixabay.com/sound-effects/search/meditation-bell/
+
 Daylight Savings Time
 
 begins at 2:00 a.m. on the second Sunday of March (at 2 a.m. the local time time skips ahead to 3 a.m. so there is one less hour in that day)
@@ -39,6 +43,9 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 
 #include "settings.h"
 #include "configServer.h"
+
+// Libraries:
+// ESP32-audioI2S
 
 // Board: Adafruit Feather ESP32-S3
 // Flash Mode: QIO 80MHz
@@ -90,24 +97,87 @@ Adafruit_MAX17048 maxlipo;
 // Create Audio object
 Audio audio;
  
-#define SS_SWITCH        24
-#define SS_NEOPIX        6
+#define SS_SWITCH       24
+#define SS_NEOPIX       6
+
+#define BUTTON_A        14
+#define BUTTON_B        15
+//#define BUTTON_C        17
+//#define BUTTON_D        18
 
 Adafruit_seesaw ss;
 seesaw_NeoPixel sspixel = seesaw_NeoPixel(1, SS_NEOPIX, NEO_GRB + NEO_KHZ800);
 
-enum class EncoderState {
-  TIME,
-  ADJUSTING,
-  COUNTING
+struct Parameter {
+  int index;
+  const char *name;
+  int lowLimit;
+  int highLimit;
+  int *pValue;
 };
 
-EncoderState encoderState = EncoderState::TIME;
+// start and end pauses in seconds
+#define START_PAUSE_IN_SECS 5
+#define END_PAUSE_IN_SECS   5
+
+int meditationInterval = 20;
+int pomodoroWorkInterval = 25;
+int pomodoroWorkPeriodCount = 5;
+int pomodoroShortRestInterval = 5;
+int pomodoroLongRestInterval = 15;
+
+Parameter parameters[] = {
+{ 1, "mTime",       1, 99, &meditationInterval        },
+{ 2, "pWork",       1, 99, &pomodoroWorkInterval      },
+{ 3, "pCount",      1, 99, &pomodoroWorkPeriodCount   },
+{ 4, "pShortRest",  1, 99, &pomodoroShortRestInterval },
+{ 5, "pLongRest",   1, 99, &pomodoroLongRestInterval  }
+};
+int parameterCount = sizeof(parameters) / sizeof(parameters[0]);
+
+#define MEDITATION_INDEX 1
+
+Parameter *selectedParameter = &parameters[0];
+bool immediate = false;
+
+void selectParameter(int index)
+{
+  selectedParameter = &parameters[index - 1];
+}
+
+void setParameterValue(Parameter *parameter, int value)
+{
+  setIntSetting(parameter->name, value);
+  *parameter->pValue = value;
+}
+
+int getParameterValue(Parameter *parameter)
+{
+  return *parameter->pValue;
+}
+
+enum class ClockState {
+  TIME,
+  SELECTING,
+  ADJUSTING,
+  START_PAUSE,
+  COUNTING,
+  POMODORO_WORK,
+  POMODORO_SHORT_REST,
+  POMODORO_LONG_REST,
+  END_PAUSE
+};
+
+ClockState clockState = ClockState::TIME;
+ClockState nextClockState;
+int nextTimeInterval;
+
 int32_t encoderCount;
 unsigned long encoderLastMoved;
 
 unsigned long timeRemaining;
 unsigned long secondStartTime;
+int shortIntervalsRemaining;
 
 unsigned int localPort = 2390;      // local port to listen for UDP packets
 
@@ -119,30 +189,34 @@ unsigned int localPort = 2390;      // local port to listen for UDP packets
 #define I2C_RTC     0x68
 #define I2C_DISPLAY 0x70
 
+uint8_t encoderBtnState = BTN_OPEN;
+bool encoderBtnChanged = false;
+
 static void buttonHandler(uint8_t btnId, uint8_t btnState) 
 {
-  if (btnState == BTN_PRESSED) {
-    Serial.printf("Pushed button\n");
-    switch (encoderState) {
-    case EncoderState::ADJUSTING:
-      encoderState = EncoderState::COUNTING;
-      secondStartTime = millis();
-      timeRemaining = encoderCount * 60000; // in milliseconds
+  switch (btnId) {
+    case 0: // encoder button
+      encoderBtnState = btnState;
+      encoderBtnChanged = true;
       break;
-    case EncoderState::COUNTING:
-      encoderState = EncoderState::TIME;
-      encoderCount = 0;
-      ss.setEncoderPosition(encoderCount);
+    case 1: // button A
+      startMeditationTimer();
       break;
-    }
-  } 
-  else {
-    // btnState == BTN_OPEN.
-    Serial.printf("Released button\n");
+    case 2: // button B
+      startPomodoroTimer();
+      break;
+    case 3: // button C
+      break;
+    case 4: // button D
+      break;
   }
 }
 
-Button myButton(0, buttonHandler);
+Button encoderButton(0, buttonHandler);
+Button buttonA(1, buttonHandler);
+Button buttonB(2, buttonHandler);
+//Button buttonC(3, buttonHandler);
+//Button buttonD(4, buttonHandler);
 
 /* Don't hardwire the IP address or we won't get the benefits of the pool.
  *  Lookup the IP address for the host name instead */
@@ -179,6 +253,18 @@ void setup()
 
   settingsInit();
 
+  getIntSetting("mTime",      meditationInterval);
+  getIntSetting("pWork",      pomodoroWorkInterval);
+  getIntSetting("pCount",     pomodoroWorkPeriodCount);
+  getIntSetting("pShortRest", pomodoroShortRestInterval);
+  getIntSetting("pLongRest",  pomodoroLongRestInterval);
+
+  Serial.printf("meditationInterval:        %d\n", meditationInterval);
+  Serial.printf("pomodoroWorkInterval:      %d\n", pomodoroWorkInterval);
+  Serial.printf("pomodoroWorkPeriodCount:   %d\n", pomodoroWorkPeriodCount);
+  Serial.printf("pomodoroShortRestInterval: %d\n", pomodoroShortRestInterval);
+  Serial.printf("pomodoroLongRestInterval:  %d\n", pomodoroLongRestInterval);
+
   if (maxlipo.begin()) {
     Serial.printf("Found MAX17048 with Chip ID: 0x%02x\n", maxlipo.getChipID()); 
   }
@@ -186,7 +272,7 @@ void setup()
     Serial.printf("Can't find MAX17048\n");
   }
 
-    // start the flash filesystem
+  // start the flash filesystem
   if (LittleFS.begin()) {
     flashFilesystemMounted = true;
   }
@@ -232,8 +318,11 @@ void setup()
   // use a pin for the built in encoder switch
   ss.pinMode(SS_SWITCH, INPUT_PULLUP);
 
-  // set starting position
-  resetEncoder();
+  // button pins
+  pinMode(BUTTON_A, INPUT_PULLUP);
+  pinMode(BUTTON_B, INPUT_PULLUP);
+  //pinMode(BUTTON_C, INPUT_PULLUP);
+  //pinMode(BUTTON_D, INPUT_PULLUP);
 
   // go back to the clock display if the encoder hasn't been moved in 10 seconds
   encoderLastMoved = millis() - 10000;
@@ -316,13 +405,8 @@ void loop()
   // check for web server requests
   configServerLoop();
 
+  updateDisplay(currentTime);
   handleEncoder(currentTime);
-}
-
-void resetEncoder()
-{
-  encoderCount = 0;
-  ss.setEncoderPosition(encoderCount);
 }
 
 void displayTime()
@@ -354,32 +438,117 @@ void displayTime()
   display.writeDisplay();
 }
 
-void displayCounter()
+void displaySelection(unsigned long currentTime)
 {
-  if (encoderCount < 1000) {
+  int parameterValue = getParameterValue(selectedParameter);
+  unsigned long currentHalfSecond = currentTime / 500;
+  if (currentHalfSecond & 1) {
+    display.writeDigitNum(0, selectedParameter->index);
+  }
+  else {
     display.writeDigitAscii(0, ' ');
   }
-  else {
-    display.writeDigitNum(0,  (encoderCount / 1000) % 10);
-  }
-  if (encoderCount < 100) {
-    display.writeDigitAscii(1, ' ');
-  }
-  else {
-    display.writeDigitNum(1, (encoderCount / 100) % 10);
-  }
+  display.writeDigitAscii(1, '-');
   display.drawColon(false);
-  if (encoderCount < 10) {
+  if (parameterValue < 10) {
     display.writeDigitAscii(3, ' ');
   }
   else {
-    display.writeDigitNum(3, (encoderCount / 10) % 10);
+    display.writeDigitNum(3, (parameterValue / 10) % 10);
   }
-  display.writeDigitNum(4,  encoderCount % 10);
+  display.writeDigitNum(4,  parameterValue % 10);
   display.writeDisplay();
 }
 
-void displayTimeRemaining()
+void displaySelectionValue(unsigned long currentTime)
+{
+  unsigned long currentHalfSecond = currentTime / 500;
+  display.writeDigitNum(0, selectedParameter->index);
+  display.writeDigitAscii(1, '-');
+  display.drawColon(false);
+  if (currentHalfSecond & 1) {
+    if (encoderCount < 10) {
+      display.writeDigitAscii(3, ' ');
+    }
+    else {
+      display.writeDigitNum(3, (encoderCount / 10) % 10);
+    }
+    display.writeDigitNum(4,  encoderCount % 10);
+  }
+  else {
+      display.writeDigitAscii(3, ' ');
+      display.writeDigitAscii(4, ' ');
+  }
+  display.writeDisplay();
+}
+
+void blankDisplay()
+{
+  display.writeDigitAscii(0, ' ');
+  display.writeDigitAscii(1, ' ');
+  display.drawColon(false);
+  display.writeDigitAscii(3, ' ');
+  display.writeDigitAscii(4, ' ');
+  display.writeDisplay();
+}
+
+void displayTimeRemaining(unsigned long currentTime)
+{
+  switch (clockState) {
+  case ClockState::START_PAUSE:
+  case ClockState::END_PAUSE:
+    blankDisplay();
+    break;
+  case ClockState::COUNTING:
+  case ClockState::POMODORO_WORK:
+  case ClockState::POMODORO_SHORT_REST:
+  case ClockState::POMODORO_LONG_REST:
+    displayCounter();
+    break;
+  }
+
+  if (timeRemaining <= 0) {
+    switch (clockState) {
+    case ClockState::START_PAUSE:
+      clockState = nextClockState;
+      startTimeInterval(currentTime, nextTimeInterval);
+      playSound("bell.mp3");
+      break;
+    case ClockState::COUNTING:
+      clockState = ClockState::END_PAUSE;
+      startTimeInterval(currentTime, END_PAUSE_IN_SECS);
+      playSound("bell.mp3");
+      break;
+    case ClockState::POMODORO_WORK:
+      if (shortIntervalsRemaining > 0) {
+        clockState = ClockState::POMODORO_SHORT_REST;
+        startTimeInterval(currentTime, pomodoroShortRestInterval * 60);
+        --shortIntervalsRemaining;
+        playSound("bell.mp3");
+      }
+      else {
+        clockState = ClockState::POMODORO_LONG_REST;
+        startTimeInterval(currentTime, pomodoroLongRestInterval * 60);
+        playSound("bell2.mp3");
+      }
+      break;
+    case ClockState::POMODORO_SHORT_REST:
+      clockState = ClockState::POMODORO_WORK;
+      startTimeInterval(currentTime, pomodoroWorkInterval * 60);
+      playSound("bell.mp3");
+      break;
+    case ClockState::POMODORO_LONG_REST:
+      clockState = ClockState::TIME;
+      playSound("bell.mp3");
+      break;
+    case ClockState::END_PAUSE:
+      clockState = ClockState::TIME;
+      break;
+    }
+  }
+}
+
+void displayCounter()
 {
   int seconds = timeRemaining / 1000;
   int minutes = seconds / 60;
@@ -406,6 +575,161 @@ void displayTimeRemaining()
   }
   display.writeDigitNum(4,  seconds % 10);
   display.writeDisplay();
+}
+
+void resetEncoder(int count)
+{
+  encoderCount = count;
+  ss.setEncoderPosition(encoderCount);
+}
+
+void updateDisplay(unsigned long currentTime)
+{
+  switch (clockState) {
+    case ClockState::TIME:
+      displayTime();
+      break;
+    case ClockState::SELECTING:
+      displaySelection(currentTime);
+      break;
+    case ClockState::ADJUSTING:
+      displaySelectionValue(currentTime);
+      break;
+    case ClockState::START_PAUSE:
+    case ClockState::COUNTING:
+    case ClockState::POMODORO_WORK:
+    case ClockState::POMODORO_SHORT_REST:
+    case ClockState::POMODORO_LONG_REST:
+    case ClockState::END_PAUSE:
+      displayTimeRemaining(currentTime);
+      break;
+    default:
+      clockState = ClockState::TIME;
+      break;
+  }
+
+  // go back to displaying the time if the encoder hasn't been turned in 10 seconds
+  if ((clockState == ClockState::SELECTING || clockState == ClockState::ADJUSTING) && (currentTime - encoderLastMoved) >= 10000) {
+    clockState = ClockState::TIME;
+  }
+
+  switch (clockState) {
+  case ClockState::START_PAUSE:
+  case ClockState::COUNTING:
+  case ClockState::POMODORO_WORK:
+  case ClockState::POMODORO_SHORT_REST:
+  case ClockState::POMODORO_LONG_REST:
+  case ClockState::END_PAUSE:
+    if ((currentTime - secondStartTime) >= 1000) {
+      secondStartTime += 1000;
+      timeRemaining -= 1000;
+    }
+    break;
+  }
+}
+
+void handleEncoder(unsigned long currentTime)
+{
+  encoderButton.update(ss.digitalRead(SS_SWITCH));
+  buttonA.update(digitalRead(BUTTON_A));
+  buttonB.update(digitalRead(BUTTON_B));
+  //buttonC.update(digitalRead(BUTTON_C));
+  //buttonD.update(digitalRead(BUTTON_D));
+
+  if (encoderBtnChanged) {
+    encoderBtnChanged = false;
+    if (encoderBtnState == BTN_PRESSED) {
+      Serial.printf("Pushed button\n");
+      switch (clockState) {
+      case ClockState::TIME:
+        clockState = ClockState::SELECTING;
+        selectParameter(MEDITATION_INDEX);
+        resetEncoder(MEDITATION_INDEX);
+        break;
+      case ClockState::SELECTING:
+        clockState = ClockState::ADJUSTING;
+        resetEncoder(getParameterValue(selectedParameter));
+        immediate = false;
+        break;
+      case ClockState::ADJUSTING:
+        setParameterValue(selectedParameter, encoderCount);
+        if (immediate) {
+          startMeditationTimer();
+        }
+        else {
+          clockState = ClockState::SELECTING;
+          encoderCount = selectedParameter->index;
+        }
+        break;
+      case ClockState::COUNTING:
+      case ClockState::POMODORO_WORK:
+      case ClockState::POMODORO_SHORT_REST:
+      case ClockState::POMODORO_LONG_REST:
+        clockState = ClockState::TIME;
+        break;
+      }
+    } 
+    else {
+      // encoderBtnState == BTN_OPEN.
+      Serial.printf("Released button\n");
+    }
+  }
+
+  int32_t newCount = ss.getEncoderPosition();
+  if (newCount != encoderCount) {
+    if (clockState == ClockState::TIME) {
+      clockState = ClockState::ADJUSTING;
+      selectParameter(MEDITATION_INDEX);
+      encoderCount = MEDITATION_INDEX;
+      immediate = true;
+    }
+    switch (clockState) {
+    case ClockState::SELECTING:
+      if (newCount >= 1 && newCount <= parameterCount) {
+        encoderCount = newCount;
+        selectParameter(encoderCount);
+      }
+      break;
+    case ClockState::ADJUSTING:
+      if (newCount >= selectedParameter->lowLimit && newCount <= selectedParameter->highLimit) {
+        encoderCount = newCount;
+      }
+      break;
+    }
+    ss.setEncoderPosition(encoderCount);
+    encoderLastMoved = currentTime;
+  }
+}
+
+void startMeditationTimer()
+{
+  clockState = ClockState::START_PAUSE;
+  nextClockState = ClockState::COUNTING;
+  nextTimeInterval = meditationInterval * 60;
+  startTimeInterval(millis(), START_PAUSE_IN_SECS);
+}
+
+void startPomodoroTimer()
+{
+  clockState = ClockState::POMODORO_WORK;
+  startTimeInterval(millis(), pomodoroWorkInterval * 60);
+  shortIntervalsRemaining = pomodoroWorkPeriodCount - 1;
+}
+
+void startTimeInterval(unsigned long currentTime, int intervalInSeconds)
+{
+  secondStartTime = currentTime;
+  timeRemaining = intervalInSeconds * 1000; // in milliseconds
+}
+
+void playSound(const char *name)
+{
+  if (flashFilesystemMounted) {
+    audio.connecttoFS(LittleFS, name);
+  }
+  else if (sdFilesystemMounted) {
+    audio.connecttoFS(SD, name);
+  }
 }
 
 // send an NTP request to the time server at the given address
@@ -472,53 +796,3 @@ void parseNTPpacket()
   Serial.printf("The time is %s\n", timeBuf);
 }
 
-void handleEncoder(unsigned long currentTime)
-{
-  switch (encoderState) {
-    case EncoderState::TIME:
-      displayTime();
-      break;
-    case EncoderState::ADJUSTING:
-      displayCounter();
-      break;
-    case EncoderState::COUNTING:
-      displayTimeRemaining();
-      if (timeRemaining <= 0) {
-        if (flashFilesystemMounted) {
-          audio.connecttoFS(LittleFS, "bell.mp3");
-        }
-        else if (sdFilesystemMounted) {
-          audio.connecttoFS(SD, "bell.mp3");
-        }
-        encoderState = EncoderState::TIME;
-        resetEncoder();
-      }
-      break;
-    default:
-      encoderState = EncoderState::TIME;
-      resetEncoder();
-      break;
-  }
-
-  // go back to displaying the time if the encoder hasn't been turned in 10 seconds
-  if (encoderState == EncoderState::ADJUSTING && (currentTime - encoderLastMoved) >= 10000) {
-    encoderState = EncoderState::TIME;
-    resetEncoder();
-  }
-
-  if (encoderState == EncoderState::COUNTING) {
-    if ((currentTime - secondStartTime) >= 1000) {
-      secondStartTime += 1000;
-      timeRemaining -= 1000;
-    }
-  }
-
-  myButton.update(ss.digitalRead(SS_SWITCH));
-
-  int32_t newCount = ss.getEncoderPosition();
-  if (newCount != encoderCount && newCount >= 0 && newCount <= 999) {
-    encoderCount = newCount;
-    encoderState = EncoderState::ADJUSTING;
-    encoderLastMoved = currentTime;
-  }
-}

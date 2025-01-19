@@ -99,6 +99,25 @@ void setStringSetting(const char *tag, const char *value)
   prefs.end();
 }
 
+bool getIntSetting(const char *tag, int &value)
+{
+    bool result = false;
+    prefs.begin("Settings", RO_MODE);
+    if (prefs.isKey(tag)) {
+      value = prefs.getInt(tag);
+      result = true;
+    }
+    prefs.end();
+    return result;
+}
+
+void setIntSetting(const char *tag, int value)
+{
+  prefs.begin("Settings", RW_MODE);
+  prefs.putInt(tag, value);
+  prefs.end();
+}
+
 bool getBooleanSetting(const char *tag, bool &value)
 {
     bool result = false;

@@ -15,5 +15,8 @@ void setTimezoneSetting(String timezoneStr);
 bool getStringSetting(const char *tag, char *value, size_t valueSize);
 void setStringSetting(const char *tag, const char *value);
 
+bool getIntSetting(const char *tag, int &value);
+void setIntSetting(const char *tag, int value);
+
 bool getBooleanSetting(const char *tag, bool &value);
 void setBooleanSetting(const char *tag, bool value);
