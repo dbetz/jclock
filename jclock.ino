@@ -405,6 +405,8 @@ void loop()
   // check for web server requests
   configServerLoop();
 
+  checkTimeRemaining(currentTime);
+
   updateDisplay(currentTime);
   handleEncoder(currentTime);
 }
@@ -492,22 +494,9 @@ void blankDisplay()
   display.writeDisplay();
 }
 
-void displayTimeRemaining(unsigned long currentTime)
+void checkTimeRemaining(unsigned long currentTime)
 {
-  switch (clockState) {
-  case ClockState::START_PAUSE:
-  case ClockState::END_PAUSE:
-    blankDisplay();
-    break;
-  case ClockState::COUNTING:
-  case ClockState::POMODORO_WORK:
-  case ClockState::POMODORO_SHORT_REST:
-  case ClockState::POMODORO_LONG_REST:
-    displayCounter();
-    break;
-  }
-
-  if (timeRemaining <= 0) {
+    if (timeRemaining <= 0) {
     switch (clockState) {
     case ClockState::START_PAUSE:
       clockState = nextClockState;
@@ -545,6 +534,22 @@ void displayTimeRemaining(unsigned long currentTime)
       clockState = ClockState::TIME;
       break;
     }
+  }
+}
+
+void displayTimeRemaining()
+{  
+  switch (clockState) {
+  case ClockState::START_PAUSE:
+  case ClockState::END_PAUSE:
+    blankDisplay();
+    break;
+  case ClockState::COUNTING:
+  case ClockState::POMODORO_WORK:
+  case ClockState::POMODORO_SHORT_REST:
+  case ClockState::POMODORO_LONG_REST:
+    displayCounter();
+    break;
   }
 }
 
@@ -601,7 +606,7 @@ void updateDisplay(unsigned long currentTime)
     case ClockState::POMODORO_SHORT_REST:
     case ClockState::POMODORO_LONG_REST:
     case ClockState::END_PAUSE:
-      displayTimeRemaining(currentTime);
+      displayTimeRemaining();
       break;
     default:
       clockState = ClockState::TIME;
