@@ -32,3 +32,10 @@ The parameters are:
 3 - the number of Pomodoro work periods
 4 - the Pomodoro short rest period in minutes
 5 - the Pomodoro long rest period in minutes
+
+To flash new data files to the ESP32:
+
+1) Hold down the BOOT button on the ESP32
+2) Press and release the RESET button
+3) The ESP32 should now be in boot mode
+4) Press CMD-Shift-P to bring up the plugin menu. Then select "Upload LittleFS..".
