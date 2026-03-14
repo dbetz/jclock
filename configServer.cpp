@@ -40,7 +40,7 @@ void configServerStart(String ssid, String passwd)
 
   // start the wifi soft AP
   char AP_ssid[100];
-  snprintf(AP_ssid, sizeof(ssid), "%s-%" PRIu64, AP_ssid_prefix, ESP.getEfuseMac());
+  snprintf(AP_ssid, sizeof(AP_ssid), "%s-%" PRIu64, AP_ssid_prefix, ESP.getEfuseMac());
   Serial.printf("Establishing '%s'\n", AP_ssid);
   WiFi.softAP(AP_ssid, AP_password);
   WiFi.softAPConfig(local_ip, gateway, subnet);
@@ -99,8 +99,10 @@ void configServerStart(String ssid, String passwd)
   webServer.on("/set-timezone", HTTP_POST, []() {
     Serial.print("Got /set-timezone request");
     if (webServer.hasArg("timezone")) {
-      wiperValue = webServer.arg("volume").toInt();
-    }
+      String tz = webServer.arg("timezone");
+      setTimezoneSetting(tz.c_str());
+      setStringSetting("Timezone", tz.c_str());
+   }
     webServer.send(200, "text/html", "");
   });
 
@@ -236,7 +238,7 @@ static bool handleFileRead(String path)
       webServer.send ( 302, "text/plain", "");
     } else {
       //server sends file
-      size_t sent = webServer.streamFile(file, contentType);
+      webServer.streamFile(file, contentType);
     }
     file.close();
     return true;

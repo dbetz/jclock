@@ -34,10 +34,6 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 #include "SD.h"
 #include "LittleFS.h"
 
-#include <Preferences.h>
-#define RW_MODE false
-#define RO_MODE true
-
 #include <WiFi.h>
 #include <WiFiClient.h>
 
@@ -50,7 +46,7 @@ ends at 2:00 a.m. on the first Sunday of November (at 2 a.m. the local time beco
 // Board: Adafruit Feather ESP32-S3
 // Flash Mode: QIO 80MHz
 // Flash Size: 4MG (32Mb)
-// Partition Scheme: Huge APP (3MB No OTA, 1MB SPIFFS)
+// Partition Scheme: Huge APP (2MB No OTA, 2MB SPIFFS)
 
 /* wiring: (module pin - ESP32 pin)
 
@@ -274,22 +270,29 @@ void setup()
 
   // start the flash filesystem
   if (LittleFS.begin()) {
+    Serial.println("Flash filesystem mounted");
     flashFilesystemMounted = true;
   }
   else {
-    Serial.printf("An Error has occurred while mounting LittleFS\n");
+    Serial.println("Flash filesystem mounting failed");
   }
 
   // Start microSD Card
   if (SD.begin(SD_CS)) {
+    Serial.println("SD card filesystem mounted");
     sdFilesystemMounted = true;
   }
   else {
-    Serial.printf("Error accessing microSD card!\n");
+    Serial.println("SD card filesystem mounting failed");
   }
   
   // Setup I2S 
-  audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+  if (audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT)) {
+    Serial.println("Audio initialized");
+  }
+  else {
+    Serial.println("Audio initialization failed");
+  }
   
   // Set Volume
   audio.setVolume(10);
@@ -730,9 +733,11 @@ void startTimeInterval(unsigned long currentTime, int intervalInSeconds)
 void playSound(const char *name)
 {
   if (flashFilesystemMounted) {
+    Serial.printf("Playing '%s' from flash filesystem\n", name);
     audio.connecttoFS(LittleFS, name);
   }
   else if (sdFilesystemMounted) {
+    Serial.printf("Playing '%s' from SD card filesystem\n", name);
     audio.connecttoFS(SD, name);
   }
 }
@@ -782,7 +787,7 @@ void parseNTPpacket()
   // print Unix time:
   Serial.printf("Unix time = %lu\n", epoch);
 
-  time_t localTime = timezone->toLocal((time_t)utcTime);
+  time_t localTime = timezone->toLocal((time_t)epoch);
 
   rtc.setEpoch(localTime, true);
 

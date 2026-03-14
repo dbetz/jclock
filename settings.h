@@ -2,6 +2,9 @@
 
 #include <Timezone.h>
 
+#define RW_MODE false
+#define RO_MODE true
+
 extern String ssid;
 extern String passwd;
 extern String timezoneName;

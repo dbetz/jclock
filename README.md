@@ -38,4 +38,5 @@ To flash new data files to the ESP32:
 1) Hold down the BOOT button on the ESP32.
 2) Press and release the RESET button.
 3) Release the BOOT button. The ESP32 should now be in boot mode.
-4) Press CMD-Shift-P to bring up the plugin menu. Then select "Upload LittleFS..".
+4) Make sure the serial console is closed as it claims the serial port
+5) Press CMD-Shift-P to bring up the plugin menu. Then select "Upload LittleFS..".
